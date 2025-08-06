@@ -1,7 +1,7 @@
 
-use std::{net::{IpAddr, Ipv4Addr}, path::PathBuf, process::{exit, Command}};
+use std::{net::IpAddr, path::PathBuf, process::{exit, Command}};
 use clap::Parser;
-use vban::{VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
+use vban::{vban_sender::VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
 use log::{error, info, trace, warn, debug};
 use simplelog::{Config, TermLogger};
 

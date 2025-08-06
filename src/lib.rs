@@ -1,13 +1,13 @@
 
 use core::{panic};
-use std::{net::{IpAddr, UdpSocket}, process::Command, str::from_utf8, time::{ Duration, Instant}, usize};
 use alsa::{pcm::*, ValueOr};
 use alsa::Direction;
 use byteorder::{ByteOrder, LittleEndian};
-use clap::error;
-use opus::{Channels, Decoder, Encoder};
-use log::{debug, Level::{Debug, Info, Trace, Warn}};
+use log::{debug};
 use log::{error, info, trace, warn};
+
+pub mod vban_recipient;
+pub mod vban_sender;
 
 
 const VBAN_HEADER_SIZE : usize = 4 + 1 + 1 + 1 + 1 + 16;
@@ -24,12 +24,10 @@ const VBAN_PACKET_HEADER_BYTES : usize = 24;
 const VBAN_PACKET_COUNTER_BYTES : usize = 4;  
 const VBAN_PACKET_MAX_LEN_BYTES : usize = VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES + VBAN_DATA_MAX_SIZE;
 
-// OPUS
-/// Number of samples per channel per opus packet, may be one of 120, 240, 480, 960, 1920, 2880
-/// VBAN only allows a maximum ov 256 samples per packet though
-const OPUS_FRAME_SIZE : usize = 240; 
-const OPUS_BITRATE : i32 = 320000;
 
+// ****************************************
+//              VBAN Header
+// ****************************************
 struct VBanHeader {
     preamble : [u8; 4],
     sample_rate : u8,
@@ -79,12 +77,15 @@ impl Into<[u8; VBAN_HEADER_SIZE+VBAN_PACKET_COUNTER_BYTES]> for VBanHeader {
 // VBan struct missing
 
 const VBAN_SR_MASK : u8 = 0x1F;
-const VBAN_SR_MAXNUMBER : u8 = 21;
 const VBAN_SRLIST : [u32; 21] = [
     6000, 12000, 24000, 48000, 96000, 192000, 384000,
     8000, 16000, 32000, 64000, 128000, 256000, 512000,
     11025, 22050, 44100, 88200, 176400, 352800, 705600
 ];
+
+// ****************************************
+//           VBAN Samples Rates
+// ****************************************
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VBanSampleRates {
@@ -232,6 +233,10 @@ impl Into<u32> for VBanSampleRates {
 
 const VBAN_PROTOCOL_MASK : u8 = 0xE0;
 
+
+// ****************************************
+//             VBAN Protocol
+// ****************************************
 #[derive(Debug, PartialEq)]
 enum VBanProtocol {
     VbanProtocolAudio         =   0x00,
@@ -261,6 +266,11 @@ impl From<u8> for VBanProtocol {
     }
 }
 
+
+
+// ****************************************
+//            VBAN Bit Resolution
+// ****************************************
 const VBAN_BIT_RESOLUTION_MASK : u8 = 0x07;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -311,7 +321,13 @@ impl Into<u8> for VBanBitResolution {
 
 const VBAN_BIT_RESOLUTION_SIZE : [u8; 6] = [ 1, 2, 3, 4, 4, 8, ];
 
-const VBAN_RESERVED_MASK : u8 = 0x08;
+
+
+// ****************************************
+//              VBAN Codec
+// ****************************************
+
+const _VBAN_RESERVED_MASK : u8 = 0x08;
 const VBAN_CODEC_MASK : u8 = 0xF0;
 
 #[derive(Debug, PartialEq)]
@@ -397,564 +413,6 @@ enum PlayerState {
     Playing,
 }
 
-pub struct VbanRecipient {
-
-    socket : UdpSocket,
-
-    sample_rate : Option<VBanSampleRates>,
-
-    num_channels : Option<u8>,
-
-    /// Definition of bitwidth (16, 24, 32) and integer/float type
-    sample_format : Option<VBanBitResolution>, 
-
-    stream_name : Option<[u8;VBAN_STREAM_NAME_SIZE]>,
-
-    nu_frame : u32,
-
-    state : PlayerState,
-
-    timer : Instant,
-
-    sink : Option<AlsaSink>,
-
-    sink_name : String,
-
-    silence : u32,
-
-    command : Option<Command>,
-
-    decoder : Option<Decoder>
-}
-
-impl VbanRecipient {
-
-    pub fn create(ip_addr : IpAddr, port: u16, stream_name : Option<String>, numch : Option<u8>, sample_rate : Option<VBanSampleRates>, sink_name : String, silence : Option<u32>) -> Option<Self> {
-
-        let mut _sn: Option<[u8; 16]> = match stream_name {
-            None => None,
-            Some(name) => {
-                if name.len() > VBAN_STREAM_NAME_SIZE {
-                    dbg!("Stream name exceeds the limit of {} characters", VBAN_STREAM_NAME_SIZE);
-                    return None;
-                }
-                let mut _sn: [u8; 16] = [0u8; 16];
-                for (idx, b) in name.bytes().enumerate(){
-                    if idx >= VBAN_STREAM_NAME_SIZE {
-                        break;
-                    }
-                    _sn[idx] = b;
-                }
-                Some(_sn)
-            }
-        };
-        
-        let to_addr = (ip_addr, port);
-        let result  = VbanRecipient{
-            socket :  match UdpSocket::bind(to_addr){
-                Ok(sock) => sock,
-                Err(_) => {
-                    dbg!("Could not create socket");
-                    return None;
-                },
-            },
-            
-            sample_rate : sample_rate,
-            
-            num_channels : numch,
-            
-            sample_format : None,
-            
-            stream_name : _sn,
-
-            nu_frame : 0,
-            
-            state : PlayerState::Idle,
-
-            timer : Instant::now(),
-
-            sink : None,
-
-            sink_name,
-
-            silence : match silence {
-                None => 0,
-                Some(val) => val,
-            },
-
-            command : None,
-
-            decoder : None
-        };
-
-        result.socket.set_read_timeout(Some(Duration::new(1, 0))).expect("Could not set timeout of socket");
-
-        info!("VBAN recepipient ready. Waiting for incoming audio packets...");
-        Some(result)
-    }
-    
-
-    pub fn handle(&mut self){
-        let mut buf :[u8; VBAN_PACKET_MAX_LEN_BYTES] = [0; VBAN_PACKET_MAX_LEN_BYTES];
-        let packet = self.socket.recv_from(&mut buf);
-        // let buf = Vec::from(buf);
-
-        if self.state == PlayerState::Playing && self.timer.elapsed().as_secs() > 2 {
-            self.state = PlayerState::Idle;
-            
-            match &self.sink{
-                None => error!("Something's wrong. Expected to find a pcm but it is unitialized."),
-                Some(sink) => {
-                    match sink.pcm.drain(){
-                        Err(errno) => error!("Error while draining pcm: {errno}"),
-                        Ok(()) => (),
-                    }
-                    match sink.pcm.drop(){
-                        Err(errno) => error!("Error while closing pcm: {errno}"),
-                        Ok(()) => (),
-                    }
-                    self.sink = None;
-                }
-            }
-            match &mut self.command {
-                None => (),
-                Some(cmd) => _ = cmd.arg("playback_stopped").output(),
-            }
-            debug!("idle");
-        }
-
-        let size = match packet {
-            Ok((size, _addr)) => {
-                size
-            },
-            _ => return,
-        };
-
-        if buf[..4] == *b"VBAN" {
-
-            let head : [u8; 28] = buf[0..28].try_into().unwrap();
-            let head = VBanHeader::from(head);
-
-            self.sample_format = Some(head.sample_format.into());
-            
-            let num_samples: u16 = head.num_samples as u16 + 1;
-            let bits_per_sample = VBAN_BIT_RESOLUTION_SIZE[self.sample_format.unwrap() as usize];
-            let codec = VBanCodec::from(head.sample_format);
-            let protocol = VBanProtocol::from(head.sample_rate);
-            let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
-            
-            if protocol != VBanProtocol::VbanProtocolAudio {
-                debug!("Discarding packet with protocol {:?} because it is not supported.", protocol);
-                return;
-            }
-            match codec {
-                VBanCodec::VbanCodecPcm => (),
-                VBanCodec::VbanCodecOpus => (),
-                _ => {
-                    error!("Any codecs other than PCM and OPUS are not supported (found {:?}).", codec);
-                    return;
-                }
-
-            }
-            if bits_per_sample != 2{
-                error!("Bitwidth other than 16 bits not supported (found {}).", bits_per_sample * 8);
-                return;
-            }
-            
-            let sr : VBanSampleRates  = head.sample_rate.into();
-            self.num_channels = Some(head.num_channels + 1);
-
-            match self.stream_name {
-                None => (),
-                Some(name) => {
-                    if from_utf8(&name).unwrap() != name_incoming {
-                        debug!("Discarding packet because stream names don't match.");
-                        return;
-                    }
-                }
-            }
-
-            let audio_data : Vec<u8> = Vec::from(&buf[VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES..size]);
-            let mut to_sink : Vec<i16>;
-            let mut left : i16 = 0;
-            let mut right : i16 = 0;
-
-            match codec{
-                VBanCodec::VbanCodecPcm => {
-                    to_sink = vec![0; audio_data.len() / bits_per_sample as usize];
-
-                    for (idx, _smp) in audio_data.iter().enumerate() {
-                        if idx % 2 == 1 {
-                            continue;
-                        }
-
-                        if idx == audio_data.len() - 1 {
-                            break;
-                        }
-
-                        let amplitude_le = LittleEndian::read_i16(&audio_data[idx..idx+2]);
-
-                        if idx % 4 == 0 {
-                            if amplitude_le > left {
-                                left = amplitude_le;
-                            }
-                        } else {
-                            if amplitude_le > right {
-                                right = amplitude_le;
-                            }
-                        }
-
-                        to_sink[idx / 2] = amplitude_le;
-                    }
-                }
-
-                VBanCodec::VbanCodecOpus => {
-                    if self.decoder.is_none(){
-
-                        let opus_ch = match self.num_channels.unwrap() {
-                            1 => Channels::Mono,
-                            2 => Channels::Stereo,
-                            _ => {
-                                error!("Error: Opus cannot handle {} channels", self.num_channels.unwrap());
-                                return;
-                            }
-                        };
-
-                        self.decoder = match Decoder::new(sr.into(), opus_ch){
-                            Ok(d) => Some(d),
-                            Err(e) => {
-                                error!("Error while trying to create an opus decoder: {e}");
-                                return;
-                            }
-                        };
-                    }
-
-                    let dec = self.decoder.as_mut().unwrap();
-                    let opus_num_samples = dec.get_nb_samples(&audio_data).unwrap(); // TODO: needs proper error handling
-
-                    to_sink = vec![0; 2 * num_samples as usize];
-                    dec.decode(&audio_data, &mut to_sink, false).unwrap();
-
-                    for (idx, ampl) in to_sink.iter().enumerate(){
-                        if idx % 2 == 0 {
-                            if *ampl > left {
-                                left = *ampl;
-                            }
-                        } else {
-                            if *ampl > right {
-                                right = *ampl;
-                            }
-                        }
-                    }
-
-                }
-
-                _ => return // we've already caught that case above
-            }
-
-
-
-
-            self.timer = Instant::now();
-            if self.state == PlayerState::Idle {
-                match &self.sink {
-                    Some(_sink) => error!("Something's wrong. Sink is Some() although it should be None"),
-                    None => {
-                        self.sample_rate = Some(sr);
-                        self.sink = match AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())){
-                            None => {
-                                warn!("Could not grab audio device");
-                                return
-                            },
-                            Some(sink) => Some(sink)
-                        };
-
-                        info!("Connected to stream {}: \nSR: {} \t Ch: {} \t BPS: {} \t Codec: {}\n", name_incoming, self.sample_rate(), self.num_channels(), self.bits_per_sample(), codec);
-
-                        /* Push silence before the data */
-                        let silence_buf = vec![0i16; (self.sample_rate() / 1000 * self.silence) as usize];
-                        self.sink.as_mut().unwrap().write(&silence_buf);
-                    }
-                }
-                match &mut self.command {
-                    None => (),
-                    Some(cmd) => _ = cmd.arg("playback_started").output(),
-                }
-                self.state = PlayerState::Playing;
-            } else {
-                if sr != self.sample_rate.unwrap(){
-                    self.sample_rate = Some(sr);
-                    let sink = self.sink.as_mut().unwrap();
-                    let _ = sink.pcm.drain();
-                    self.sink = Some(AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())).expect("Could not create audio device with the required specs."));
-                }
-            }
-            let sink = self.sink.as_mut().unwrap();
-            sink.write(&to_sink);
-            print!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
-        } else{
-            debug!("Got UDP packet that is not VBAN");
-        }
-    }
-
-
-    // SETTER
-    pub fn set_command(&mut self, cmd : Command){
-        self.command = Some(cmd);
-    }
-
-    // GETTER
-    fn name(&self) -> Option<[u8;16]>{
-        self.stream_name
-    }
-
-    fn name_str(&self) -> String{
-        match &self.stream_name {
-            None => String::from(""),
-            Some(name) => String::from(from_utf8(name).unwrap())
-        }
-    }
-
-    fn sample_rate(&self) -> u32 {
-        VBAN_SRLIST[self.sample_rate.unwrap() as usize]
-    }
-
-    fn bits_per_sample(&self) -> u8 {
-        self.sample_format.unwrap() as u8 + 1
-    }
-
-    fn num_channels(&self) -> u8 {
-        self.num_channels.unwrap() as u8
-    }
-
-
-}
-
-
-// ****************************************
-//              VBAN SENDER
-// ****************************************
-
-pub struct VbanSender {
-
-    peer : (IpAddr, u16),
-
-    socket : UdpSocket,
-
-    sample_rate : VBanSampleRates,
-
-    num_channels : u8, // 1 = one channel, unlike in the VBAN header, where 0 = one channel
-
-    /// Definition of codec, bitwidth (16, 24, 32) and integer/float type
-    sample_format : VBanBitResolution, 
-
-    /// Stream name
-    name : [u8; 16],
-
-    nu_frame : u32,
-
-    state : PlayerState,
-
-    source : Option<AlsaSource>,
-
-    /// Name of the audio system source
-    source_name : String,
-
-    command : Option<Command>,
-
-    encoder : Option<Encoder>
-}
-
-impl VbanSender {
-
-    pub fn create(peer : (IpAddr, u16), local_addr : (IpAddr, u16), stream_name : Option<String>, numch : u8, sample_rate : VBanSampleRates, format : VBanBitResolution, source_name : String, encoder : Option<VBanCodec>) -> Option<Self> {
-
-        if format != VBanBitResolution::VbanBitfmt16Int {
-            error!("Only 16 bit sample resolution is supported");
-            return None;
-        }
-
-        if stream_name.clone().is_some_and(|n| n.len() > VBAN_STREAM_NAME_SIZE){
-            warn!("Stream name exceeds limit of {} chars", VBAN_STREAM_NAME_SIZE);
-            return None;
-        }
-
-        let mut name   = [0; 16];
-        
-        match stream_name {
-            None => {
-                let default_name = "Stream1";
-                for (idx, ch) in default_name.as_bytes().iter().enumerate(){
-                    name[idx] = *ch;
-                }
-            }
-            Some(custom_name) => {
-                for (idx, ch) in name.iter_mut().enumerate(){
-                    *ch = custom_name.as_bytes()[idx];
-                } 
-            }
-        }
-
-        let enc = match encoder {
-            None => None,
-            Some(VBanCodec::VbanCodecPcm) => None,
-            Some(VBanCodec::VbanCodecOpus) => {
-                let ch = match numch {
-                    1 => Channels::Mono,
-                    2 => Channels::Stereo,
-                    _ => {
-                        error!("Encoder OPUS does not support {} channels!", numch);
-                        return None
-                    }
-                };
-                let mut e =  Encoder::new(sample_rate.into(), Channels::from(ch), opus::Application::Audio).expect("Could not create encoder!");
-                e.set_bitrate(opus::Bitrate::Bits(OPUS_BITRATE)).expect("Could not set bitrate of encoder");
-                Some(e)
-            }
-            _ => {
-                error!("Requested codec is not implemented.");
-                return None;
-            }
-        };
-        
-        let result = VbanSender {
-
-            peer,
-
-            socket : match UdpSocket::bind(local_addr){
-                Ok(sock) => {
-                    trace!("Successfully created socket");
-                    sock
-                },
-                Err(_) => {
-                    error!("Could not create udp socket");
-                    return None
-                }
-            },
-
-            sample_rate : sample_rate,
-
-            num_channels : numch,
-
-            sample_format : format, 
-
-            name : name,
-
-            nu_frame : 0,
-
-            state : PlayerState::Idle,
-
-            source : None,
-
-            source_name,
-
-            command : None,
-
-            encoder : enc
-
-        };
-
-        Some(result)
-    }
-
-    pub fn handle(&mut self){
-        let mut vban_packet :[u8; VBAN_PACKET_MAX_LEN_BYTES] = [0; VBAN_PACKET_MAX_LEN_BYTES];
-
-        // this assumes stereo ... better would be to take as much samples as possible for our given num_channels
-        let mut audio_in : Vec<i16> = vec![0; VBAN_PACKET_MAX_SAMPLES * 2];
-
-        if self.state == PlayerState::Idle {
-
-            self.source = match AlsaSource::init(&self.source_name, self.num_channels as u32, self.sample_rate.into()){
-                None => {
-                    error!("Could not create alsa source");
-                    return;
-                }
-                Some(s) => {
-                    self.state = PlayerState::Playing;
-                    Some(s)
-                }
-            }
-
-        }
-
-        let source = self.source.as_mut().unwrap();
-
-        match self.encoder {
-            None => (),
-            Some(_) => audio_in.resize(OPUS_FRAME_SIZE*self.num_channels as usize, 0),
-        }
-
-        source.read(&mut audio_in);
-
-        let mut encoded = vec![0u8; audio_in.len() * 2];
-
-        match self.encoder.as_mut() {
-            None => {
-                for (idx, smp) in audio_in.iter().enumerate(){
-                    LittleEndian::write_i16(&mut encoded[2* idx..], *smp);
-                }
-            },
-            Some(enc) => {
-                let bytes = match enc.encode(&audio_in, &mut encoded){
-                    Ok(size) => size,
-                    Err(_e) => 0
-                };
-                encoded.resize(bytes, 0); // this should hopefully shrink the vector
-                debug!("Size of encoded is {bytes} after encoding");
-            }
-        }
-
-        let num_samples = ((audio_in.len() / self.num_channels as usize) - 1) as u8;
-        debug!("num_Samples={num_samples}");
-
-        let mut format= self.sample_format as u8;
-        match self.encoder{
-            None => (),
-            Some(_) => {
-                format |= VBanCodec::VbanCodecOpus as u8;
-            }
-        }
-
-        let hdr = VBanHeader {
-            preamble : [b'V', b'B', b'A', b'N'],
-            sample_rate : self.sample_rate.into(),
-            num_samples : num_samples,
-            num_channels : self.num_channels -1 , // 0 means one channel in VBAN
-            sample_format : format,
-            stream_name : self.name,
-            nu_frame : self.nu_frame
-        };
-
-        let hdr : [u8; VBAN_PACKET_HEADER_BYTES+VBAN_PACKET_COUNTER_BYTES] = hdr.into();
-
-        vban_packet[..VBAN_HEADER_SIZE+VBAN_PACKET_COUNTER_BYTES].copy_from_slice(&hdr);
-
-        if hdr.len() + encoded.len() > VBAN_PACKET_MAX_LEN_BYTES {
-            error!("Constructed VBAN packet would exceed the limit of {} bytes.", VBAN_PACKET_MAX_LEN_BYTES);
-            return;
-        }
-
-        debug!("Packet has an effective length of {} bytes", hdr.len() + encoded.len());
-
-        let vban_data = &mut vban_packet[VBAN_PACKET_HEADER_BYTES+VBAN_PACKET_COUNTER_BYTES..];
-        vban_data[..encoded.len()].copy_from_slice(&encoded);
-
-        match self.socket.connect(self.peer){
-            Ok(()) => (),
-            Err(e) => error!("Could not connect to peer: {e}")
-        }
-
-        match self.socket.send(&vban_packet[..hdr.len()+encoded.len()]){
-            Ok(bytes) => trace!("Successfully sent {bytes} bytes via socket"),
-            Err(e) => error!("Error while sending data via socket: {e}")
-        }
-
-        self.nu_frame += 1;
-    }
-
-
-}
 
 
 
@@ -1140,7 +598,7 @@ impl AlsaSource {
 }
 
 impl VbanSource for AlsaSource {
-    fn read(&self,buf : &mut [i16]) {
+    fn read(&self, buf : &mut [i16]) {
         let io = match self.pcm.io_i16(){
             Err(e) => {
                 error!("PCM error while grabbin I/O: {e}");

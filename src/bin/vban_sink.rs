@@ -1,5 +1,5 @@
 use std::{net::IpAddr, path::PathBuf, process::Command};
-use vban::VbanRecipient;
+use vban::vban_recipient::VbanRecipient;
 use clap::Parser;
 
 /// VBAN sink - by Lennard Jönsson
