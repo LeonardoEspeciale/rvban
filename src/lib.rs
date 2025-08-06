@@ -489,7 +489,7 @@ impl VbanRecipient {
 
         result.socket.set_read_timeout(Some(Duration::new(1, 0))).expect("Could not set timeout of socket");
 
-        println!("VBAN recepipient ready. Waiting for incoming audio packets...");
+        info!("VBAN recepipient ready. Waiting for incoming audio packets...");
         Some(result)
     }
     
@@ -503,14 +503,14 @@ impl VbanRecipient {
             self.state = PlayerState::Idle;
             
             match &self.sink{
-                None => println!("Something's wrong. Expected to find a pcm but it is unitialized."),
+                None => error!("Something's wrong. Expected to find a pcm but it is unitialized."),
                 Some(sink) => {
                     match sink.pcm.drain(){
-                        Err(errno) => println!("Error while draining pcm: {errno}"),
+                        Err(errno) => error!("Error while draining pcm: {errno}"),
                         Ok(()) => (),
                     }
                     match sink.pcm.drop(){
-                        Err(errno) => println!("Error while closing pcm: {errno}"),
+                        Err(errno) => error!("Error while closing pcm: {errno}"),
                         Ok(()) => (),
                     }
                     self.sink = None;
@@ -520,7 +520,7 @@ impl VbanRecipient {
                 None => (),
                 Some(cmd) => _ = cmd.arg("playback_stopped").output(),
             }
-            println!("idle");
+            debug!("idle");
         }
 
         let size = match packet {
@@ -544,20 +544,20 @@ impl VbanRecipient {
             let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
             
             if protocol != VBanProtocol::VbanProtocolAudio {
-                println!("Discarding packet with protocol {:?} because it is not supported.", protocol);
+                debug!("Discarding packet with protocol {:?} because it is not supported.", protocol);
                 return;
             }
             match codec {
                 VBanCodec::VbanCodecPcm => (),
                 VBanCodec::VbanCodecOpus => (),
                 _ => {
-                    println!("Any codecs other than PCM and OPUS are not supported (found {:?}).", codec);
+                    error!("Any codecs other than PCM and OPUS are not supported (found {:?}).", codec);
                     return;
                 }
 
             }
             if bits_per_sample != 2{
-                println!("Bitwidth other than 16 bits not supported (found {}).", bits_per_sample * 8);
+                error!("Bitwidth other than 16 bits not supported (found {}).", bits_per_sample * 8);
                 return;
             }
             
@@ -568,7 +568,7 @@ impl VbanRecipient {
                 None => (),
                 Some(name) => {
                     if from_utf8(&name).unwrap() != name_incoming {
-                        println!("Discarding packet because stream names don't match.");
+                        debug!("Discarding packet because stream names don't match.");
                         return;
                     }
                 }
@@ -615,7 +615,7 @@ impl VbanRecipient {
                             1 => Channels::Mono,
                             2 => Channels::Stereo,
                             _ => {
-                                println!("Error: Opus cannot handle {} channels", self.num_channels.unwrap());
+                                error!("Error: Opus cannot handle {} channels", self.num_channels.unwrap());
                                 return;
                             }
                         };
@@ -623,7 +623,7 @@ impl VbanRecipient {
                         self.decoder = match Decoder::new(sr.into(), opus_ch){
                             Ok(d) => Some(d),
                             Err(e) => {
-                                println!("Error while trying to create an opus decoder: {e}");
+                                error!("Error while trying to create an opus decoder: {e}");
                                 return;
                             }
                         };
@@ -658,18 +658,18 @@ impl VbanRecipient {
             self.timer = Instant::now();
             if self.state == PlayerState::Idle {
                 match &self.sink {
-                    Some(_sink) => println!("Something's wrong. Sink is Some() although it should be None"),
+                    Some(_sink) => error!("Something's wrong. Sink is Some() although it should be None"),
                     None => {
                         self.sample_rate = Some(sr);
                         self.sink = match AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())){
                             None => {
-                                println!("Could not grab audio device");
+                                warn!("Could not grab audio device");
                                 return
                             },
                             Some(sink) => Some(sink)
                         };
 
-                        println!("Connected to stream {}: \nSR: {} \t Ch: {} \t BPS: {} \t Codec: {}\n", name_incoming, self.sample_rate(), self.num_channels(), self.bits_per_sample(), codec);
+                        info!("Connected to stream {}: \nSR: {} \t Ch: {} \t BPS: {} \t Codec: {}\n", name_incoming, self.sample_rate(), self.num_channels(), self.bits_per_sample(), codec);
 
                         /* Push silence before the data */
                         let silence_buf = vec![0i16; (self.sample_rate() / 1000 * self.silence) as usize];
@@ -683,7 +683,6 @@ impl VbanRecipient {
                 self.state = PlayerState::Playing;
             } else {
                 if sr != self.sample_rate.unwrap(){
-                    println!("SR: {} -> {}", self.sample_rate.unwrap(), sr);
                     self.sample_rate = Some(sr);
                     let sink = self.sink.as_mut().unwrap();
                     let _ = sink.pcm.drain();
@@ -694,7 +693,7 @@ impl VbanRecipient {
             sink.write(&to_sink);
             print!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
         } else{
-            println!("Packet is not VBAN");
+            debug!("Got UDP packet that is not VBAN");
         }
     }
 
@@ -776,7 +775,7 @@ impl VbanSender {
         }
 
         if stream_name.clone().is_some_and(|n| n.len() > VBAN_STREAM_NAME_SIZE){
-            println!("Stream name exceeds limit of {} chars", VBAN_STREAM_NAME_SIZE);
+            warn!("Stream name exceeds limit of {} chars", VBAN_STREAM_NAME_SIZE);
             return None;
         }
 
@@ -828,7 +827,7 @@ impl VbanSender {
                     sock
                 },
                 Err(_) => {
-                    println!("Could not create udp socket");
+                    error!("Could not create udp socket");
                     return None
                 }
             },
@@ -1007,11 +1006,11 @@ impl AlsaSink {
         match sink.pcm.start(){
             Ok(()) => (),
             Err(errno) => {
-                println!("Error: {errno}");
+                error!("Error starting PCM: {errno}");
                 sink.pcm.drain().expect("Drain failed");
                 match sink.pcm.recover(errno.errno(), true){
                     Ok(()) => (),
-                    Err(errno) => println!("Recovering after failed start failed too ({errno})."),
+                    Err(errno) => error!("Recovering after failed start failed too ({errno})."),
                 }
             },
         }
@@ -1035,12 +1034,13 @@ impl AlsaSink {
             let swp = sink.pcm.sw_params_current().unwrap();
             match swp.set_start_threshold(512) {
                 Ok(()) => (),
-                Err(errno) => println!("Could not set start_threshold sw parameter (error {errno})."),
+                Err(errno) => warn!("Could not set start_threshold sw parameter (error {errno})."),
             }
 
             let thr = swp.get_start_threshold().unwrap();
-            // todo? set silence threshold?
-            println!("Start threshold is {thr}.");
+
+
+            // TODO? Set silence threshold?
         }
         Some(sink)
     }
@@ -1056,18 +1056,18 @@ impl VbanSink for AlsaSink {
             Err(errno) => {
                 // Maybe try to investigate the pcm device here and try to reopen it (because broken pipe)
 
-                println!("Write did not work. Error: {errno}");
+                warn!("Write did not work. Error: {errno}");
                 // let state = self.pcm.state();
 
                 match self.pcm.recover(errno.errno(), true){
                     Ok(()) => {
-                        println!("Was able to recover from error");
+                        warn!("Was able to recover from error");
                         match io.writei(buf){
                             Ok(_) => (),
-                            Err(errno) => println!("Second attempt to write buffer failed ({errno})."),
+                            Err(errno) => error!("Second attempt to write buffer failed ({errno})."),
                         }
                     },
-                    Err(errno2) => println!("Could not recover from error (errno2={errno2}"),
+                    Err(errno2) => error!("Could not recover from error (errno2={errno2}"),
                 }
             },
             Ok(_size) => (),
@@ -1114,11 +1114,11 @@ impl AlsaSource {
         match source.pcm.start(){
             Ok(()) => (),
             Err(errno) => {
-                println!("Error: {errno}");
+                warn!("Error starting PCM: {errno}");
                 source.pcm.drain().expect("Drain failed");
                 match source.pcm.recover(errno.errno(), true){
                     Ok(()) => (),
-                    Err(errno) => println!("Recovering after failed start failed too ({errno}."),
+                    Err(errno) => error!("Recovering after failed start failed too ({errno}."),
                 }
             },
         }
@@ -1127,7 +1127,7 @@ impl AlsaSource {
             let swp = source.pcm.sw_params_current().unwrap();
             match swp.set_start_threshold(512) {
                 Ok(()) => (),
-                Err(errno) => println!("Could not set start_threshold sw parameter (error {errno})."),
+                Err(errno) => warn!("Could not set start_threshold sw parameter (error {errno})."),
             }
 
             let thr = swp.get_start_threshold().unwrap();
