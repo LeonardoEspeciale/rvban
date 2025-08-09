@@ -1,5 +1,6 @@
 use std::{net::IpAddr, path::PathBuf, process::Command};
-use vban::vban_recipient::VbanRecipient;
+use simplelog::{TermLogger, Config};
+use rvban::{vban_recipient::VbanRecipient, VBanSampleRates};
 use clap::Parser;
 
 /// VBAN sink - by Lennard Jönsson
@@ -36,12 +37,36 @@ struct Cli {
     /// Specify a script file that is run when the playback state changes
     #[arg(short='m', long, value_name = "script")]
     command : Option<String>,
+
+    /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
+    #[arg(short, long)]
+    log_level : Option<usize>,
+
+    /// Sample rate
+    #[arg(short, long)]
+    sample_rate : Option<u32>
 }
 
 // #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn main() -> Result<(), i32> {
 
     let cli = Cli::parse();
+
+    let ll = match cli.log_level {
+        None => log::LevelFilter::Info,
+        Some(0) => log::LevelFilter::Off,
+        Some(1) => log::LevelFilter::Trace,
+        Some(2) => log::LevelFilter::Debug,
+        Some(3) => log::LevelFilter::Info,
+        Some(4) => log::LevelFilter::Warn,
+        Some(5) => log::LevelFilter::Error,
+        _ => {
+            println!("Log level must be between 0 and 5. Using default.");
+            log::LevelFilter::Info
+        }
+    };
+
+    TermLogger::init(ll, Config::default(), simplelog::TerminalMode::Stdout, simplelog::ColorChoice::Auto).unwrap();
 
     let use_config = match cli.config {
         None => false,
@@ -52,6 +77,11 @@ fn main() -> Result<(), i32> {
     let port : u16;
     let stream_name : Option<String>;
     let mut device_name = String::from("default");
+
+    let sr = match cli.sample_rate {
+        None => VBanSampleRates::SampleRate48000Hz,
+        Some (s) => s.into()
+    };
     
     if use_config {
         // todo 
@@ -88,7 +118,7 @@ fn main() -> Result<(), i32> {
 
 
     let mut vbr = match VbanRecipient::create(
-    addr, port, stream_name, None, None,
+    addr, port, stream_name, None, Some(sr),
     device_name, cli.silence){
         None => {
             println!("Could not create VBAN recipient.");

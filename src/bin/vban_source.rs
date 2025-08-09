@@ -1,7 +1,7 @@
 
 use std::{net::IpAddr, path::PathBuf, process::{exit, Command}};
 use clap::Parser;
-use vban::{vban_sender::VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
+use rvban::{vban_sender::VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
 use log::{error, info, trace, warn, debug};
 use simplelog::{Config, TermLogger};
 
@@ -36,9 +36,13 @@ struct Cli {
     #[arg(short, long)]
     device_name : Option<String>,
 
-    /// Encoder
+    /// Encoder (Opus, PCM)
     #[arg(short, long)]
-    encoder : Option<String>
+    encoder : Option<String>,
+
+    /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
+    #[arg(short='v', long)]
+    log_level : Option<usize>,
 }
 
 fn main() {
@@ -49,14 +53,28 @@ fn main() {
         Some(_) => panic!("Config files are currently not supported."),
     };
 
-    TermLogger::init(log::LevelFilter::Info, Config::default(), simplelog::TerminalMode::Stdout, simplelog::ColorChoice::Auto).unwrap();
+    let ll = match cli.log_level {
+        None => log::LevelFilter::Info,
+        Some(0) => log::LevelFilter::Off,
+        Some(1) => log::LevelFilter::Trace,
+        Some(2) => log::LevelFilter::Debug,
+        Some(3) => log::LevelFilter::Info,
+        Some(4) => log::LevelFilter::Warn,
+        Some(5) => log::LevelFilter::Error,
+        _ => {
+            println!("Log level must be between 0 and 5. Using default.");
+            log::LevelFilter::Info
+        }
+    };
+
+    TermLogger::init(ll, Config::default(), simplelog::TerminalMode::Stdout, simplelog::ColorChoice::Auto).unwrap();
 
     let peer_ip : IpAddr = match cli.peer_address.parse(){
         Ok(addr) => {
             debug!("Using {} as peer address", addr);
             addr
         }
-        Err(e) => {
+        Err(_e) => {
             error!("{} is not a valid IP address", cli.peer_address);
             exit(1);
         }
@@ -75,7 +93,7 @@ fn main() {
     let stream_name : Option<String>;
     let mut device_name = String::from("default");
 
-    let mut encoder : VBanCodec;
+    let encoder : VBanCodec;
     if cli.encoder.is_some(){
         encoder = match cli.encoder.unwrap().as_str(){
             "PCM" => {
@@ -83,7 +101,7 @@ fn main() {
             },
             "Opus" | "OPUS" | "opus" => {
                 info!("Using OPUS encoder.");
-                VBanCodec::VbanCodecOpus
+                VBanCodec::VbanCodecOpus(None)
             },
             _ => {
                 error!("Codec not recognized.");
@@ -142,6 +160,5 @@ fn main() {
     loop {
         vbs.handle();
     }
-
 
 }

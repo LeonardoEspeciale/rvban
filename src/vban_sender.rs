@@ -1,5 +1,5 @@
 
-use std::{net::{IpAddr, UdpSocket}, process::Command, str::from_utf8, time::{ Duration, Instant}, usize};
+use std::{net::{IpAddr, UdpSocket}, process::Command, usize};
 use byteorder::{ByteOrder, LittleEndian};
 use opus::{Channels, Encoder};
 use log::{debug};
@@ -45,7 +45,7 @@ pub struct VbanSender {
 
     command : Option<Command>,
 
-    encoder : Option<Encoder>
+    encoder : VBanCodec
 }
 
 impl VbanSender {
@@ -78,27 +78,32 @@ impl VbanSender {
             }
         }
 
-        let enc = match encoder {
-            None => None,
-            Some(VBanCodec::VbanCodecPcm) => None,
-            Some(VBanCodec::VbanCodecOpus) => {
-                let ch = match numch {
-                    1 => Channels::Mono,
-                    2 => Channels::Stereo,
-                    _ => {
-                        error!("Encoder OPUS does not support {} channels!", numch);
-                        return None
-                    }
-                };
-                let mut e =  Encoder::new(sample_rate.into(), Channels::from(ch), opus::Application::Audio).expect("Could not create encoder!");
-                e.set_bitrate(opus::Bitrate::Bits(OPUS_BITRATE)).expect("Could not set bitrate of encoder");
-                Some(e)
-            }
-            _ => {
-                error!("Requested codec is not implemented.");
-                return None;
-            }
-        };
+        let enc;
+        if encoder.is_some() {
+            enc = match encoder.unwrap() {
+                VBanCodec::VbanCodecPcm => VBanCodec::VbanCodecPcm,
+                VBanCodec::VbanCodecOpus(None) => {
+                    let ch = match numch {
+                        1 => Channels::Mono,
+                        2 => Channels::Stereo,
+                        _ => {
+                            error!("Encoder OPUS does not support {} channels!", numch);
+                            return None
+                        }
+                    };
+                    let mut e =  Encoder::new(sample_rate.into(), Channels::from(ch), opus::Application::Audio).expect("Could not create encoder!");
+                    e.set_bitrate(opus::Bitrate::Bits(OPUS_BITRATE)).expect("Could not set bitrate of encoder");
+                    VBanCodec::VbanCodecOpus(Some(e))
+                },
+                VBanCodec::VbanCodecOpus(Some(e)) => VBanCodec::VbanCodecOpus(Some(e)),
+                _ => {
+                    error!("Requested codec is not implemented.");
+                    return None;
+                }
+            };
+        } else {
+            enc = VBanCodec::VbanCodecPcm;
+        }
         
         let result = VbanSender {
 
@@ -148,6 +153,9 @@ impl VbanSender {
 
         if self.state == PlayerState::Idle {
 
+
+            info!("Starting stream '{}' -  SR: {}, Ch: {}, Encoder: {}", std::str::from_utf8(&self.name).unwrap_or(""), self.sample_rate, self.num_channels, self.encoder);
+
             self.source = match AlsaSource::init(&self.source_name, self.num_channels as u32, self.sample_rate.into()){
                 None => {
                     error!("Could not create alsa source");
@@ -164,28 +172,30 @@ impl VbanSender {
         let source = self.source.as_mut().unwrap();
 
         match self.encoder {
-            None => (),
-            Some(_) => audio_in.resize(OPUS_FRAME_SIZE*self.num_channels as usize, 0),
+            VBanCodec::VbanCodecPcm => (),
+            VBanCodec::VbanCodecOpus(_) => audio_in.resize(OPUS_FRAME_SIZE*self.num_channels as usize, 0),
+            _ => panic!("Unsupported codec in VbanSender struct")
         }
 
         source.read(&mut audio_in);
 
         let mut encoded = vec![0u8; audio_in.len() * 2];
 
-        match self.encoder.as_mut() {
-            None => {
+        match self.encoder {
+            VBanCodec::VbanCodecPcm => {
                 for (idx, smp) in audio_in.iter().enumerate(){
                     LittleEndian::write_i16(&mut encoded[2* idx..], *smp);
                 }
             },
-            Some(enc) => {
-                let bytes = match enc.encode(&audio_in, &mut encoded){
+            VBanCodec::VbanCodecOpus(ref mut enc) => {
+                let bytes = match enc.as_mut().unwrap().encode(&audio_in, &mut encoded){
                     Ok(size) => size,
                     Err(_e) => 0
                 };
                 encoded.resize(bytes, 0); // this should hopefully shrink the vector
                 debug!("Size of encoded is {bytes} after encoding");
-            }
+            },
+            _ => panic!("Unsupported Codec in VbanSender struct")
         }
 
         let num_samples = ((audio_in.len() / self.num_channels as usize) - 1) as u8;
@@ -193,10 +203,9 @@ impl VbanSender {
 
         let mut format= self.sample_format as u8;
         match self.encoder{
-            None => (),
-            Some(_) => {
-                format |= VBanCodec::VbanCodecOpus as u8;
-            }
+            VBanCodec::VbanCodecPcm => (),
+            VBanCodec::VbanCodecOpus(_) => format |= VBanCodec::VbanCodecOpus as u8,
+            _ => ()
         }
 
         let hdr = VBanHeader {
