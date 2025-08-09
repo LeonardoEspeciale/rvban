@@ -1,14 +1,18 @@
-# VBAN implementation in Rust
+# RVBAN
 
-written by a Rust newbie - feedback appreciated!
+VBAN implementation in Rust
+
+_written by a Rust newbie - feedback appreciated!_
 
 __Work in progress.. but mostly works!__
 
-A sink for VBAN streams for Linux systems using ALSA (works with pipewire too). 
+A source and sink for VBAN streams for Linux systems using ALSA (works with pipewire too). 
 
 I developed this application for my Raspberry Pi to running Moode Audio to support VBAN. So I can confirm this runs on a RPi 4 with 4 GB RAM. 
 
-# Usage
+# vban_sink
+
+## Usage
 
 Start a VBAN stream, for example by using the Voicemeeter application from the creator of VBAN (vb-audio.com). Direct the outgoing stream to the machine that should run vban_sink. Run `vban_sink` (simple as that). Make sure port 6980 is open for incoming udp packets. vban_sink adapts to the incoming sample rate. __Only 16 bit format supported, though!.__
 
