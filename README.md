@@ -1,4 +1,4 @@
-# VBAN Sink
+# VBAN implementation in Rust
 
 written by a Rust newbie - feedback appreciated!
 
