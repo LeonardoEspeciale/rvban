@@ -160,7 +160,7 @@ impl VbanRecipient {
             }
             match codec {
                 VBanCodec::VbanCodecPcm => (),
-                VBanCodec::VbanCodecOpus => (),
+                VBanCodec::VbanCodecOpus(_) => (),
                 _ => {
                     error!("Any codecs other than PCM and OPUS are not supported (found {:?}).", codec);
                     return;
@@ -219,7 +219,7 @@ impl VbanRecipient {
                     }
                 }
 
-                VBanCodec::VbanCodecOpus => {
+                VBanCodec::VbanCodecOpus(_) => {
                     if self.decoder.is_none(){
 
                         let opus_ch = match self.num_channels.unwrap() {
@@ -302,7 +302,7 @@ impl VbanRecipient {
             }
             let sink = self.sink.as_mut().unwrap();
             sink.write(&to_sink);
-            print!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
+            println!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
         } else{
             debug!("Got UDP packet that is not VBAN");
         }

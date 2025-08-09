@@ -1,3 +1,5 @@
+//! VBAN specific definitions and useful implementations for the related libraries and binaries are conteined in this crate.
+
 
 use core::{panic};
 use alsa::{pcm::*, ValueOr};
@@ -230,6 +232,35 @@ impl Into<u32> for VBanSampleRates {
     }
 }
 
+impl From<u32> for VBanSampleRates {
+    fn from(value: u32) -> Self {
+        match value {
+            6000 => VBanSampleRates::SampleRate6000Hz,
+            12000 => VBanSampleRates::SampleRate12000Hz,
+            24000 => VBanSampleRates::SampleRate24000Hz,
+            48000 => VBanSampleRates::SampleRate48000Hz,
+            96000 => VBanSampleRates::SampleRate96000Hz,
+            192000 => VBanSampleRates::SampleRate192000Hz,
+            384000 => VBanSampleRates::SampleRate384000Hz,
+            8000 => VBanSampleRates::SampleRate8000Hz,
+            16000 => VBanSampleRates::SampleRate16000Hz,
+            32000 => VBanSampleRates::SampleRate32000Hz,
+            64000 => VBanSampleRates::SampleRate64000Hz,
+            128000 => VBanSampleRates::SampleRate128000Hz,
+            256000 => VBanSampleRates::SampleRate256000Hz,
+            512000 => VBanSampleRates::SampleRate512000Hz,
+            11025 => VBanSampleRates::SampleRate11025Hz,
+            22050 => VBanSampleRates::SampleRate22050Hz,
+            44100 => VBanSampleRates::SampleRate44100Hz,
+            88200 => VBanSampleRates::SampleRate88200Hz,
+            176400 => VBanSampleRates::SampleRate176400Hz,
+            352800 => VBanSampleRates::SampleRate352800Hz,
+            705600 => VBanSampleRates::SampleRate705600Hz,
+            _ => VBanSampleRates::SampleRateNotSupported
+        }
+    }
+}
+
 
 const VBAN_PROTOCOL_MASK : u8 = 0xE0;
 
@@ -330,31 +361,31 @@ const VBAN_BIT_RESOLUTION_SIZE : [u8; 6] = [ 1, 2, 3, 4, 4, 8, ];
 const _VBAN_RESERVED_MASK : u8 = 0x08;
 const VBAN_CODEC_MASK : u8 = 0xF0;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum VBanCodec {
-    VbanCodecPcm              =   0x00,
-    VbanCodecVbca             =   0x10,
-    VbanCodecVbcv             =   0x20,
-    VbanCodecUndefined3      =   0x30,
-    VbanCodecUndefined4      =   0x40,
-    VbanCodecUndefined5      =   0x50,
-    VbanCodecUndefined6      =   0x60,
-    VbanCodecUndefined7      =   0x70,
-    VbanCodecUndefined8      =   0x80,
-    VbanCodecUndefined9      =   0x90,
-    VbanCodecUndefined10     =   0xA0,
-    VbanCodecUndefined11     =   0xB0,
-    VbanCodecUndefined12     =   0xC0,
-    VbanCodecUndefined13     =   0xD0,
-    VbanCodecOpus             =   0xE0,
-    VbanCodecUser             =   0xF0
+    VbanCodecPcm,
+    VbanCodecVbca,
+    VbanCodecVbcv,
+    VbanCodecUndefined3,
+    VbanCodecUndefined4,
+    VbanCodecUndefined5,
+    VbanCodecUndefined6,
+    VbanCodecUndefined7,
+    VbanCodecUndefined8,
+    VbanCodecUndefined9,
+    VbanCodecUndefined10,
+    VbanCodecUndefined11,
+    VbanCodecUndefined12,
+    VbanCodecUndefined13,
+    VbanCodecOpus(Option<opus::Encoder>),
+    VbanCodecUser 
 }
 
 impl std::fmt::Display for VBanCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VBanCodec::VbanCodecPcm => write!(f, "PCM"),
-            VBanCodec::VbanCodecOpus => write!(f, "Opus") ,
+            VBanCodec::VbanCodecOpus(_) => write!(f, "Opus") ,
             _ => write!(f, "Undefined")
         }
     }
@@ -377,7 +408,7 @@ impl From<u8> for VBanCodec {
             0xB0 => VBanCodec::VbanCodecUndefined11,
             0xC0 => VBanCodec::VbanCodecUndefined12,
             0xD0 => VBanCodec::VbanCodecUndefined13,
-            0xE0 => VBanCodec::VbanCodecOpus,
+            0xE0 => VBanCodec::VbanCodecOpus(None),
             0xF0 => VBanCodec::VbanCodecUser,
             _ => VBanCodec::VbanCodecUser
         }
@@ -401,7 +432,7 @@ impl Into<u8> for VBanCodec {
             VBanCodec::VbanCodecUndefined11 => 0xB0,
             VBanCodec::VbanCodecUndefined12 => 0xC0,
             VBanCodec::VbanCodecUndefined13 => 0xD0,
-            VBanCodec::VbanCodecOpus => 0xE0,
+            VBanCodec::VbanCodecOpus(_) => 0xE0,
             VBanCodec::VbanCodecUser => 0xF0
         }
     }
