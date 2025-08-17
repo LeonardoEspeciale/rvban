@@ -43,7 +43,7 @@ If the option `-m` is used a script may be executed on playback state change. Th
 
 ### Usage
 
-Play audio through any application on your system. Start the vban_source by invoking `vban_source -i <IP-address>` with the IP address of the receiving system. If you want to 
+Play audio through any application on your system. Start the vban_source by invoking `vban_source -i <IP-address>` with the IP address of the receiving system. If you want to reduce data throughput of your network, you may use the Opus enccoder by using the parameter `-e opus`, when invokung vban_source.
 
 ### Options
 
