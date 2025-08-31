@@ -2,11 +2,18 @@
 
 
 use core::{panic};
+use std::sync::Arc;
+#[cfg(feature = "pipewire")]
+use std::thread::JoinHandle;
 use alsa::{pcm::*, ValueOr};
 use alsa::Direction;
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug};
 use log::{error, info, trace, warn};
+
+#[cfg(feature = "pipewire")]
+use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
+
 
 pub mod vban_recipient;
 pub mod vban_sender;
@@ -375,9 +382,9 @@ pub enum VBanCodec {
     VbanCodecUndefined9,
     VbanCodecUndefined10,
     VbanCodecUndefined11,
-    VbanCodecUndefined12,
-    VbanCodecUndefined13,
     VbanCodecOpus(Option<opus::Encoder>),
+    VbanCodecUndefined13,
+    VbanCodecUndefined14,
     VbanCodecUser 
 }
 
@@ -406,9 +413,9 @@ impl From<u8> for VBanCodec {
             0x90 => VBanCodec::VbanCodecUndefined9,
             0xA0 => VBanCodec::VbanCodecUndefined10,
             0xB0 => VBanCodec::VbanCodecUndefined11,
-            0xC0 => VBanCodec::VbanCodecUndefined12,
+            0xC0 => VBanCodec::VbanCodecOpus(None),
             0xD0 => VBanCodec::VbanCodecUndefined13,
-            0xE0 => VBanCodec::VbanCodecOpus(None),
+            0xE0 => VBanCodec::VbanCodecUndefined14,
             0xF0 => VBanCodec::VbanCodecUser,
             _ => VBanCodec::VbanCodecUser
         }
@@ -430,9 +437,9 @@ impl Into<u8> for VBanCodec {
             VBanCodec::VbanCodecUndefined9 => 0x90,
             VBanCodec::VbanCodecUndefined10 => 0xA0,
             VBanCodec::VbanCodecUndefined11 => 0xB0,
-            VBanCodec::VbanCodecUndefined12 => 0xC0,
+            VBanCodec::VbanCodecOpus(_) => 0xC0,
             VBanCodec::VbanCodecUndefined13 => 0xD0,
-            VBanCodec::VbanCodecOpus(_) => 0xE0,
+            VBanCodec::VbanCodecUndefined14 => 0xE0,
             VBanCodec::VbanCodecUser => 0xF0
         }
     }
@@ -568,7 +575,7 @@ impl VbanSink for AlsaSink {
 
 
 // ****************************************
-//             VBAN SOURCE 
+//             VBAN SOURCES
 // ****************************************
 pub trait VbanSource {
     fn read(&self, buf : &mut [i16]);
@@ -576,7 +583,7 @@ pub trait VbanSource {
 
 
 // ****************************************
-//             VBAN SOURCE 
+//             ALSA SOURCE
 // ****************************************
 
 struct AlsaSource {
@@ -632,7 +639,7 @@ impl VbanSource for AlsaSource {
     fn read(&self, buf : &mut [i16]) {
         let io = match self.pcm.io_i16(){
             Err(e) => {
-                error!("PCM error while grabbin I/O: {e}");
+                error!("PCM error while grabbing I/O: {e}");
                 return;
             },
             Ok(io) => io
@@ -646,5 +653,115 @@ impl VbanSource for AlsaSource {
             }
         }
 
+    }
+}
+
+#[cfg(feature = "pipewire")]
+struct PipewireSource {
+    buffer : Arc<std::sync::RwLock<Vec<u8>>>,
+    handle : JoinHandle<Option<()>>
+}
+
+impl PipewireSource {
+    pub fn init(target : Option<String>) -> Option<Self> {
+
+        // create arc/mutex of self and put data into self.data in seperate thread?
+
+        let buf = Arc::new(std::sync::RwLock::new(Vec::<u8>::new()));
+
+        let output = PipewireSource {
+            buffer : buf.clone(),
+
+            handle : PipewireSource::get_pw_loop_handle(buf.clone(), target)
+        };
+
+        Some(output)
+
+    }
+
+    fn get_pw_loop_handle(buffer : Arc<std::sync::RwLock<Vec<u8>>>, target : Option<String>) -> JoinHandle<Option<()>> {
+        std::thread::spawn(move ||{
+
+                let mainloop = match MainLoop::new(None){
+                    Ok(theloop) => theloop,
+                    Err(e) => {
+                        error!("Error while creating a pipewire main loop ({e}).");
+                        return None;
+                    }
+                };
+
+                let context = match Context::new(&mainloop){
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        error!("Error while creating pipewire context: {e}.");
+                        return None;
+                    }
+                };
+
+                let core = match context.connect(None){
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Error while connecting pipewire core to context: {e}.");
+                        return None;
+                    }
+                };
+
+                let tgt = match target {
+                    None => "".to_string(),
+                    Some(str) => str
+                };
+        
+                let props = properties!{
+                    *pipewire::keys::MEDIA_TYPE => "Audio",
+                    *pipewire::keys::MEDIA_CATEGORY => "Capture",
+                    *pipewire::keys::MEDIA_ROLE => "Music",
+                    *pipewire::keys::MODULE_DESCRIPTION => "Pipewire Rust Test",
+                    *pipewire::keys::AUDIO_FORMAT => "S16LE",
+                    *pipewire::keys::AUDIO_ALLOWED_RATES => "[ 44100 48000 ]",
+                    *pipewire::keys::TARGET_OBJECT => tgt.as_str()
+                };
+                
+                let stream = Stream::new(&core, "vban", props).unwrap();
+                let _handle = stream.add_local_listener().process( move |stream, _: &mut Vec<u8>| {
+                    let mut buf = match stream.dequeue_buffer(){
+                        None => return,
+                        Some(buffer) => buffer
+                    };
+                    let size = buf.datas_mut()[0].chunk().size();
+                    let data = Vec::from(buf.datas_mut()[0].data().unwrap());
+                    let data = &data[..size as usize];
+        
+                    let mut buffer = buffer.write().unwrap();
+                    buffer.resize(data.len(), 0);
+                    buffer.copy_from_slice(data);
+        
+                }).register().unwrap();
+        
+                
+                // set up stream connection
+                let mut pod_data = vec![0];
+                let builder = spa::pod::builder::Builder::new(&mut pod_data);
+                let mut audio_info = spa::param::audio::AudioInfoRaw::new();
+                audio_info.set_format(AudioFormat::S16LE);
+                audio_info.set_channels(2);
+                audio_info.set_rate(48000);
+                unsafe {
+                    spa_format_audio_raw_build(builder.as_raw_ptr(), spa::sys::SPA_PARAM_EnumFormat, &mut audio_info.as_raw());
+                }
+                let pod = spa::pod::Pod::from_bytes(&pod_data).unwrap();
+                stream.connect(spa::utils::Direction::Input, Some(pipewire::constants::ID_ANY), pipewire::stream::StreamFlags::AUTOCONNECT, &mut [pod]).unwrap();
+                
+                mainloop.run();
+
+                Some(())    // is never reached
+            })
+            
+    }
+
+}
+
+impl VbanSource for PipewireSource {
+    fn read(&self, buf : &mut [i16]) {
+        
     }
 }
