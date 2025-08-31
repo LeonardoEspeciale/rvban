@@ -43,7 +43,7 @@ struct Cli {
     log_level : Option<usize>,
 
     /// Sample rate
-    #[arg(short, long)]
+    #[arg(short='r', long)]
     sample_rate : Option<u32>
 }
 

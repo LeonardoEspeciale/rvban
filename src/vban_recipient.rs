@@ -122,7 +122,7 @@ impl VbanRecipient {
                     }
                     match sink.pcm.drop(){
                         Err(errno) => error!("Error while closing pcm: {errno}"),
-                        Ok(()) => (),
+                        Ok(()) => debug!("Audio device released"),
                     }
                     self.sink = None;
                 }
@@ -262,7 +262,6 @@ impl VbanRecipient {
 
                 _ => return // we've already caught that case above
             }
-
 
 
 
