@@ -314,17 +314,6 @@ impl VbanRecipient {
     }
 
     // GETTER
-    fn name(&self) -> Option<[u8;16]>{
-        self.stream_name
-    }
-
-    fn name_str(&self) -> String{
-        match &self.stream_name {
-            None => String::from(""),
-            Some(name) => String::from(from_utf8(name).unwrap())
-        }
-    }
-
     fn sample_rate(&self) -> u32 {
         VBAN_SRLIST[self.sample_rate.unwrap() as usize]
     }

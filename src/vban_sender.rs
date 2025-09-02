@@ -4,7 +4,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use opus::{Channels, Encoder};
 use log::{debug};
 use log::{error, info, trace, warn};
-use crate::{AlsaSource, PlayerState, VBanBitResolution, VBanCodec, VBanHeader, VBanSampleRates, VbanSource, VBAN_HEADER_SIZE, VBAN_PACKET_COUNTER_BYTES, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_MAX_LEN_BYTES, VBAN_PACKET_MAX_SAMPLES, VBAN_STREAM_NAME_SIZE};
+use crate::{AlsaSource, PipewireSource, PlayerState, VBanBitResolution, VBanCodec, VBanHeader, VBanSampleRates, VbanSource, VBAN_HEADER_SIZE, VBAN_PACKET_COUNTER_BYTES, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_MAX_LEN_BYTES, VBAN_PACKET_MAX_SAMPLES, VBAN_STREAM_NAME_SIZE};
 
 // OPUS
 /// Number of samples per channel per opus packet, may be one of 120, 240, 480, 960, 1920, 2880
@@ -38,7 +38,7 @@ pub struct VbanSender {
 
     state : PlayerState,
 
-    source : Option<AlsaSource>,
+    source : Option<PipewireSource>,
 
     /// Name of the audio system source
     source_name : String,
@@ -153,10 +153,10 @@ impl VbanSender {
 
         if self.state == PlayerState::Idle {
 
-
             info!("Starting stream '{}' -  SR: {}, Ch: {}, Encoder: {}", std::str::from_utf8(&self.name).unwrap_or(""), self.sample_rate, self.num_channels, self.encoder);
 
-            self.source = match AlsaSource::init(&self.source_name, self.num_channels as u32, self.sample_rate.into()){
+            // self.source = match AlsaSource::init(&self.source_name, self.num_channels as u32, self.sample_rate.into()){
+            self.source = match PipewireSource::init(Some(String::from("spotify"))){
                 None => {
                     error!("Could not create alsa source");
                     return;
@@ -193,30 +193,32 @@ impl VbanSender {
                     Err(_e) => 0
                 };
                 encoded.resize(bytes, 0); // this should hopefully shrink the vector
-                debug!("Size of encoded is {bytes} after encoding");
+                debug!("OPUS compression: {} => {bytes} bytes", audio_in.len() * 2);
             },
             _ => panic!("Unsupported Codec in VbanSender struct")
         }
 
-        let num_samples = ((audio_in.len() / self.num_channels as usize) - 1) as u8;
-        debug!("num_Samples={num_samples}");
+        let num_samples = (audio_in.len() / self.num_channels as usize) as u8;
+        debug!("Samples in packet: {}", num_samples);
 
         let mut format= self.sample_format as u8;
         match self.encoder{
             VBanCodec::VbanCodecPcm => (),
-            VBanCodec::VbanCodecOpus(_) => format |= VBanCodec::VbanCodecOpus as u8,
+            VBanCodec::VbanCodecOpus(_) => format |= <VBanCodec as Into<u8>>::into(VBanCodec::VbanCodecOpus(None)),
             _ => ()
         }
 
         let hdr = VBanHeader {
             preamble : [b'V', b'B', b'A', b'N'],
             sample_rate : self.sample_rate.into(),
-            num_samples : num_samples,
+            num_samples : num_samples - 1,
             num_channels : self.num_channels -1 , // 0 means one channel in VBAN
             sample_format : format,
             stream_name : self.name,
             nu_frame : self.nu_frame
         };
+
+        debug!("Composing packet with nu_frame: {}", hdr.nu_frame);
 
         let hdr : [u8; VBAN_PACKET_HEADER_BYTES+VBAN_PACKET_COUNTER_BYTES] = hdr.into();
 

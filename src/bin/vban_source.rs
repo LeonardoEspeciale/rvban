@@ -1,5 +1,5 @@
 
-use std::{net::IpAddr, path::PathBuf, process::{exit, Command}, thread::sleep, time::Duration};
+use std::{net::IpAddr, path::PathBuf, process::exit};
 use clap::Parser;
 use rvban::{vban_sender::VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
 use log::{error, info, trace, warn, debug};
@@ -96,7 +96,7 @@ fn main() {
     let encoder : VBanCodec;
     if cli.encoder.is_some(){
         encoder = match cli.encoder.unwrap().as_str(){
-            "PCM" => {
+            "PCM" | "Pcm" | "pcm" => {
                 VBanCodec::VbanCodecPcm
             },
             "Opus" | "OPUS" | "opus" => {

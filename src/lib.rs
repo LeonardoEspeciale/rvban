@@ -13,7 +13,7 @@ use log::{error, info, trace, warn};
 
 #[cfg(feature = "pipewire")]
 use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
-
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 pub mod vban_recipient;
 pub mod vban_sender;
@@ -535,8 +535,8 @@ impl AlsaSink {
 
             let thr = swp.get_start_threshold().unwrap();
 
-
             // TODO? Set silence threshold?
+
         }
         Some(sink)
     }
@@ -578,7 +578,7 @@ impl VbanSink for AlsaSink {
 //             VBAN SOURCES
 // ****************************************
 pub trait VbanSource {
-    fn read(&self, buf : &mut [i16]);
+    fn read(&mut self, buf : &mut [i16]);
 }
 
 
@@ -636,7 +636,7 @@ impl AlsaSource {
 }
 
 impl VbanSource for AlsaSource {
-    fn read(&self, buf : &mut [i16]) {
+    fn read(&mut self, buf : &mut [i16]) {
         let io = match self.pcm.io_i16(){
             Err(e) => {
                 error!("PCM error while grabbing I/O: {e}");
@@ -658,8 +658,9 @@ impl VbanSource for AlsaSource {
 
 #[cfg(feature = "pipewire")]
 struct PipewireSource {
-    buffer : Arc<std::sync::RwLock<Vec<u8>>>,
-    handle : JoinHandle<Option<()>>
+    rx : Receiver<Vec<u8>>,
+    remainder : Vec<u8>,
+    _handle : JoinHandle<Option<()>>
 }
 
 impl PipewireSource {
@@ -667,19 +668,22 @@ impl PipewireSource {
 
         // create arc/mutex of self and put data into self.data in seperate thread?
 
-        let buf = Arc::new(std::sync::RwLock::new(Vec::<u8>::new()));
+        // create a channel, read from the channel in the sender::read function. implement a for loop in the ::handle to send all samples
+        let (tx , rx) : (Sender<Vec<u8>>, Receiver<Vec<u8>>)= channel();
 
-        let output = PipewireSource {
-            buffer : buf.clone(),
+        let src = PipewireSource {
+            rx,
 
-            handle : PipewireSource::get_pw_loop_handle(buf.clone(), target)
+            remainder : Vec::<u8>::new(),
+
+            _handle : PipewireSource::get_pw_loop_handle(target, tx)
         };
 
-        Some(output)
+        Some(src)
 
     }
 
-    fn get_pw_loop_handle(buffer : Arc<std::sync::RwLock<Vec<u8>>>, target : Option<String>) -> JoinHandle<Option<()>> {
+    fn get_pw_loop_handle(target : Option<String>, tx: Sender<Vec<u8>>) -> JoinHandle<Option<()>> {
         std::thread::spawn(move ||{
 
                 let mainloop = match MainLoop::new(None){
@@ -731,9 +735,26 @@ impl PipewireSource {
                     let data = Vec::from(buf.datas_mut()[0].data().unwrap());
                     let data = &data[..size as usize];
         
-                    let mut buffer = buffer.write().unwrap();
-                    buffer.resize(data.len(), 0);
-                    buffer.copy_from_slice(data);
+                    // let mut buffer = buffer.write().unwrap();
+                    // buffer.resize(data.len(), 0);
+                    // buffer.copy_from_slice(data);
+
+                    if size.rem_euclid(256) > 0 {
+                        warn!("Size of data acquired from pipewire ist no divisible bei 256");
+                    } 
+
+                    let iter = data.chunks_exact(256);
+                    for chunks in iter{
+                        let _ = tx.send(chunks.to_vec());
+                    }
+                    
+                    // Add VBAN stuff
+
+                    // Currently, I have this problem:
+                    // If I try to stick with the init and handle member functions, I run into the problem during init, that I can't use the buffer in the process callback and the struct simultaneously.
+                    // If I want to create a different approch, where the init() spawns a task handling the VBAN composition, the source needs to access the parent struct (VbanSender), which turns my 
+                    // turns my project structure inside out ...
+
         
                 }).register().unwrap();
         
@@ -761,7 +782,35 @@ impl PipewireSource {
 }
 
 impl VbanSource for PipewireSource {
-    fn read(&self, buf : &mut [i16]) {
-        
+    fn read(&mut self, buf : &mut [i16]) {
+
+        let bytes = buf.len() * 2;
+
+        let mut data = match self.remainder.len() > 0 {
+            false => self.rx.recv().unwrap(),
+            true => {
+                let d = Vec::from(self.remainder.clone());
+                self.remainder.clear();
+                d
+            }
+        };
+
+        while data.len() < bytes{
+            data.append(self.rx.recv().unwrap().as_mut());
+        }
+
+        if data.len() > bytes{
+            self.remainder.append(&mut data[bytes..].to_vec());
+            trace!("remainder has a new length of {} bytes", self.remainder.len());
+            data = data[..bytes].to_vec();
+        }
+
+        if bytes!= data.len(){
+            panic!("sizes of pipewire and vban data are different: data {}, vban: {}", data.len(), buf.len()*2);
+        }
+
+        for (idx, frame) in data.chunks(2).enumerate(){
+            buf[idx] = LittleEndian::read_i16(frame);
+        }
     }
 }
