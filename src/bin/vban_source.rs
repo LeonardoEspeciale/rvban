@@ -9,12 +9,20 @@ use simplelog::{Config, TermLogger};
 struct Cli {
 
     /// IP address of the receiver, e.g. 192.168.0.100
-    #[arg(short='i', long)]
+    #[arg(short='i', long, default_value = "127.0.0.1")]
     peer_address : String,
 
     /// Port of the receiver. Specify a port if you don't want to use the default port 6980.
-    #[arg(short='p', long)]
-    peer_port : Option<u16>,
+    #[arg(short='p', long, default_value_t = 6980)]
+    peer_port : u16,
+
+    /// Specify a different stream name
+    #[arg(short='n', long, value_name = "NAME", default_value = "Stream1")]
+    stream_name : String,
+
+    /// Sample rate
+    #[arg(short='r', long, default_value = "48000")]
+    sample_rate : u32,
 
     /// Specify an IP-address if you don't want to bind to all interfaces
     #[arg(short='l', long)]
@@ -25,20 +33,16 @@ struct Cli {
     local_port : Option<u16>,
 
     /// Use a config file
-    #[arg(short, long, value_name = "file")]
+    #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// Specify a stream name (defaults to Stream1)
-    #[arg(short, long, value_name = "name")]
-    stream_name : Option<String>,
-
-    /// Name of the audio device that is used as a source (default is "default")
     #[arg(short, long)]
-    device_name : Option<String>,
+    /// Name of the audio source, i.e. pipewire target application or ALSA (loopback) device
+    source_name : Option<String>,
 
     /// Encoder (Opus, PCM)
-    #[arg(short, long)]
-    encoder : Option<String>,
+    #[arg(short, long, default_value = "opus")]
+    encoder : String,
 
     /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
     #[arg(short='v', long)]
