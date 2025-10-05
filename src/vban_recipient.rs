@@ -4,7 +4,7 @@ use std::{net::{IpAddr, UdpSocket}, process::Command, str::from_utf8, time::{ Du
 use byteorder::{ByteOrder, LittleEndian};
 use opus::{Channels, Decoder};
 use log::{debug};
-use log::{error, info, trace, warn};
+use log::{trace, error, info, warn};
 use crate::{VBanSampleRates, VBanBitResolution,VBAN_STREAM_NAME_SIZE, PlayerState, AlsaSink, VBAN_PACKET_MAX_LEN_BYTES, VBanCodec, VBanProtocol, VBanHeader, VBAN_BIT_RESOLUTION_SIZE, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_COUNTER_BYTES, VBAN_SRLIST, VbanSink};
 
 
@@ -109,7 +109,7 @@ impl VbanRecipient {
         let mut buf :[u8; VBAN_PACKET_MAX_LEN_BYTES] = [0; VBAN_PACKET_MAX_LEN_BYTES];
         let packet = self.socket.recv_from(&mut buf);
         // let buf = Vec::from(buf);
-
+        
         if self.state == PlayerState::Playing && self.timer.elapsed().as_secs() > 2 {
             self.state = PlayerState::Idle;
             
@@ -131,9 +131,8 @@ impl VbanRecipient {
                 None => (),
                 Some(cmd) => _ = cmd.arg("playback_stopped").output(),
             }
-            debug!("idle");
         }
-
+        
         let size = match packet {
             Ok((size, _addr)) => {
                 size
@@ -141,11 +140,13 @@ impl VbanRecipient {
             _ => return,
         };
 
-        if buf[..4] == *b"VBAN" {
+        trace!("UDP packet len {} from {}", size, packet.unwrap().1);
 
+        if buf[..4] == *b"VBAN" {
+            
             let head : [u8; 28] = buf[0..28].try_into().unwrap();
             let head = VBanHeader::from(head);
-
+            
             self.sample_format = Some(head.sample_format.into());
             
             let num_samples: u16 = head.num_samples as u16 + 1;
@@ -153,6 +154,8 @@ impl VbanRecipient {
             let codec = VBanCodec::from(head.sample_format);
             let protocol = VBanProtocol::from(head.sample_rate);
             let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
+
+            trace!("VBAN - #smp {}, bps {}, codec {}, name {}", num_samples, bits_per_sample, codec, name_incoming);
             
             if protocol != VBanProtocol::VbanProtocolAudio {
                 debug!("Discarding packet with protocol {:?} because it is not supported.", protocol);
@@ -263,8 +266,6 @@ impl VbanRecipient {
                 _ => return // we've already caught that case above
             }
 
-
-
             self.timer = Instant::now();
             if self.state == PlayerState::Idle {
                 match &self.sink {
@@ -276,7 +277,10 @@ impl VbanRecipient {
                                 warn!("Could not grab audio device");
                                 return
                             },
-                            Some(sink) => Some(sink)
+                            Some(sink) => {
+                                trace!("Successfully initialized ALSA device with {} channels at {} Hz", self.num_channels(), self.sample_rate());
+                                Some(sink)
+                            }
                         };
 
                         info!("Connected to stream {}: \nSR: {} \t Ch: {} \t BPS: {} \t Codec: {}\n", name_incoming, self.sample_rate(), self.num_channels(), self.bits_per_sample(), codec);

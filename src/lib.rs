@@ -2,14 +2,13 @@
 
 
 use core::{panic};
-use std::sync::Arc;
 #[cfg(feature = "pipewire")]
 use std::thread::JoinHandle;
 use alsa::{pcm::*, ValueOr};
 use alsa::Direction;
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug};
-use log::{error, info, trace, warn};
+use log::{error, trace, warn};
 
 #[cfg(feature = "pipewire")]
 use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
@@ -559,14 +558,14 @@ impl VbanSink for AlsaSink {
                     Ok(()) => {
                         warn!("Was able to recover from error");
                         match io.writei(buf){
-                            Ok(_) => (),
+                            Ok(num) => trace!("Wrote {num} samples into ALSA device after recovery."),
                             Err(errno) => error!("Second attempt to write buffer failed ({errno})."),
                         }
                     },
                     Err(errno2) => error!("Could not recover from error (errno2={errno2}"),
                 }
             },
-            Ok(_size) => (),
+            Ok(num) => trace!("Wrote {num} samples into ALSA device."),
         }
 
     }
@@ -664,7 +663,7 @@ struct PipewireSource {
 }
 
 impl PipewireSource {
-    pub fn init(target : Option<String>) -> Option<Self> {
+    pub fn init(sample_rate: u32, target : Option<String>) -> Option<Self> {
 
         // create arc/mutex of self and put data into self.data in seperate thread?
 
@@ -676,14 +675,14 @@ impl PipewireSource {
 
             remainder : Vec::<u8>::new(),
 
-            _handle : PipewireSource::get_pw_loop_handle(target, tx)
+            _handle : PipewireSource::get_pw_loop_handle(sample_rate, target, tx)
         };
 
         Some(src)
 
     }
 
-    fn get_pw_loop_handle(target : Option<String>, tx: Sender<Vec<u8>>) -> JoinHandle<Option<()>> {
+    fn get_pw_loop_handle(sample_rate : u32, target : Option<String>, tx: Sender<Vec<u8>>) -> JoinHandle<Option<()>> {
         std::thread::spawn(move ||{
 
                 let mainloop = match MainLoop::new(None){
@@ -715,17 +714,17 @@ impl PipewireSource {
                     Some(str) => str
                 };
         
-                let props = properties!{
+                let stream_props = properties!{
                     *pipewire::keys::MEDIA_TYPE => "Audio",
                     *pipewire::keys::MEDIA_CATEGORY => "Capture",
                     *pipewire::keys::MEDIA_ROLE => "Music",
                     *pipewire::keys::MODULE_DESCRIPTION => "Pipewire Rust Test",
-                    *pipewire::keys::AUDIO_FORMAT => "S16LE",
-                    *pipewire::keys::AUDIO_ALLOWED_RATES => "[ 44100 48000 ]",
+                    // *pipewire::keys::AUDIO_FORMAT => "S16LE",
+                    // *pipewire::keys::AUDIO_ALLOWED_RATES => "[ 44100 ]",
                     *pipewire::keys::TARGET_OBJECT => tgt.as_str()
                 };
                 
-                let stream = Stream::new(&core, "vban", props).unwrap();
+                let stream = Stream::new(&core, "vban", stream_props).unwrap();
                 let _handle = stream.add_local_listener().process( move |stream, _: &mut Vec<u8>| {
                     let mut buf = match stream.dequeue_buffer(){
                         None => return,
@@ -739,22 +738,10 @@ impl PipewireSource {
                     // buffer.resize(data.len(), 0);
                     // buffer.copy_from_slice(data);
 
-                    if size.rem_euclid(256) > 0 {
-                        warn!("Size of data acquired from pipewire ist no divisible bei 256");
-                    } 
-
                     let iter = data.chunks_exact(256);
                     for chunks in iter{
                         let _ = tx.send(chunks.to_vec());
                     }
-                    
-                    // Add VBAN stuff
-
-                    // Currently, I have this problem:
-                    // If I try to stick with the init and handle member functions, I run into the problem during init, that I can't use the buffer in the process callback and the struct simultaneously.
-                    // If I want to create a different approch, where the init() spawns a task handling the VBAN composition, the source needs to access the parent struct (VbanSender), which turns my 
-                    // turns my project structure inside out ...
-
         
                 }).register().unwrap();
         
@@ -765,12 +752,12 @@ impl PipewireSource {
                 let mut audio_info = spa::param::audio::AudioInfoRaw::new();
                 audio_info.set_format(AudioFormat::S16LE);
                 audio_info.set_channels(2);
-                audio_info.set_rate(48000);
+                audio_info.set_rate(sample_rate);
                 unsafe {
                     spa_format_audio_raw_build(builder.as_raw_ptr(), spa::sys::SPA_PARAM_EnumFormat, &mut audio_info.as_raw());
                 }
                 let pod = spa::pod::Pod::from_bytes(&pod_data).unwrap();
-                stream.connect(spa::utils::Direction::Input, Some(pipewire::constants::ID_ANY), pipewire::stream::StreamFlags::AUTOCONNECT, &mut [pod]).unwrap();
+                stream.connect(spa::utils::Direction::Input, Some(pipewire::constants::ID_ANY), pipewire::stream::StreamFlags::AUTOCONNECT, &mut [pod]).expect("Could not connect pipewire stream.");
                 
                 mainloop.run();
 
@@ -805,12 +792,14 @@ impl VbanSource for PipewireSource {
             data = data[..bytes].to_vec();
         }
 
-        if bytes!= data.len(){
+        if bytes != data.len(){
             panic!("sizes of pipewire and vban data are different: data {}, vban: {}", data.len(), buf.len()*2);
         }
 
         for (idx, frame) in data.chunks(2).enumerate(){
             buf[idx] = LittleEndian::read_i16(frame);
         }
+
+        trace!("read {} bytes from pipewire", data.len());
     }
 }

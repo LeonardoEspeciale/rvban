@@ -1,8 +1,8 @@
 
-use std::{net::IpAddr, path::PathBuf, process::exit};
+use std::{net::{IpAddr, UdpSocket}, path::PathBuf, process::exit};
 use clap::Parser;
 use rvban::{vban_sender::VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
-use log::{error, info, trace, warn, debug};
+use log::{error, debug};
 use simplelog::{Config, TermLogger};
 
 #[derive(Parser)]
@@ -47,6 +47,10 @@ struct Cli {
     /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
     #[arg(short='v', long)]
     log_level : Option<usize>,
+
+    #[arg(short, long)]
+    /// An audio backend to use (currently supported: alsa, pipewire)
+    backend : Option<String>
 }
 
 fn main() {
@@ -79,81 +83,90 @@ fn main() {
             addr
         }
         Err(_e) => {
-            error!("{} is not a valid IP address", cli.peer_address);
+            error!("{} is not a valid IP address. Example: 127.0.0.1", cli.peer_address);
             exit(1);
         }
     };
 
-    let peer_port = match cli.peer_port {
-        None => 6980,
-        Some(port) => port
-    };
-
-    let peer_addr = (peer_ip, peer_port);
+    let peer_addr = (peer_ip, cli.peer_port);
 
 
     let local_ip : IpAddr;
     let local_port : u16;
-    let stream_name : Option<String>;
-    let mut device_name = String::from("default");
+    let sample_rate : VBanSampleRates;
+    let mut source_name = String::from("default");
 
-    let encoder : VBanCodec;
-    if cli.encoder.is_some(){
-        encoder = match cli.encoder.unwrap().as_str(){
-            "PCM" | "Pcm" | "pcm" => {
-                VBanCodec::VbanCodecPcm
-            },
-            "Opus" | "OPUS" | "opus" => {
-                info!("Using OPUS encoder.");
-                VBanCodec::VbanCodecOpus(None)
-            },
-            _ => {
-                error!("Codec not recognized.");
-                exit(1)
-            }
+    let encoder = match cli.encoder.as_str(){
+        "PCM" | "Pcm" | "pcm" => {
+            VBanCodec::VbanCodecPcm
+        },
+        "Opus" | "OPUS" | "opus" => {
+            debug!("Using OPUS encoder.");
+            VBanCodec::VbanCodecOpus(None)
+        },
+        _ => {
+            error!("Codec not recognized.");
+            exit(1)
         }
-    } else {
-        encoder = VBanCodec::VbanCodecPcm;
-    }
+    };
     
 
     if use_config {
-        // todo 
+        // todo: use a config
         local_ip = "127.0.0.1".parse().unwrap();
         local_port = 6980;
-        stream_name = None;
+        sample_rate = VBanSampleRates::SampleRate48000Hz;
     } else {
         local_ip = match cli.local_addr {
             None => "0.0.0.0".parse().unwrap(),
             Some(addr) => {
-                println!("Using {addr} as address to bind to.");
+                debug!("Using {addr} as address to bind to.");
                 addr
             },
         };
         local_port = match cli.local_port {
-            None => 6980,
+            None => {
+                let mut port = 40101;
+                let mut tries = 0;
+                loop{
+                    if UdpSocket::bind((local_ip, port)).is_err(){
+                        if tries < 20 {
+                            debug!("Port {} cannot be used for UDP. Trying with different port...", port);
+                            port += 10;
+                            tries += 1;
+                        } else {
+                            error!("Giving up after {tries} tries to find an open UDP port to bind to");
+                            exit(-1)
+                        }
+                        continue;
+                    } else {
+                        break port;
+                    }
+                }
+            },
             Some(num) => {
-                println!("Using port {num}.");
+                debug!("Using local UDP port {num}.");
                 num
             },
         };
-        stream_name = match cli.stream_name {
-            None => None,
-            Some(name) => {
-                println!("Using {name} as stream name.");
-                Some(name)
-            },
+
+        sample_rate = cli.sample_rate.into();
+        if sample_rate == VBanSampleRates::SampleRateNotSupported {
+            error!("Sample rate not supported. Supported sample rates are 8000, 16000, 32000, 44100, 48000, 88200, 96000, 176400 and 192000 Hz.");
+            exit(1);
+        }
+        debug!("Using sample rate of {}", sample_rate);
+
+        source_name = match cli.source_name {
+            None => "spotify".to_string(),
+            Some(str) => str
         };
-        device_name = match cli.device_name {
-            // None => String::from("default"),
-            None => String::from("pipewire"),
-            Some(name) => name,
-        };
+       
     }
 
     let local_addr = (local_ip, local_port);
 
-    let mut vbs = match VbanSender::create(peer_addr, local_addr, stream_name, 2, VBanSampleRates::SampleRate48000Hz, VBanBitResolution::VbanBitfmt16Int, device_name, Some(encoder)){
+    let mut vbs = match VbanSender::create(peer_addr, local_addr, cli.stream_name, 2, sample_rate, VBanBitResolution::VbanBitfmt16Int, source_name, encoder.into()){
         None => {
             println!("Error: Could not create VBAN Sender");
             exit(1)
