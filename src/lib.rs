@@ -18,6 +18,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 #[cfg(feature = "recipient")]
 pub mod vban_recipient;
+
 #[cfg(feature = "pipewire")]
 pub mod vban_sender_pw;
 #[cfg(feature = "alsa")]

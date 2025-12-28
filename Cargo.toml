@@ -10,7 +10,7 @@ description = "Libraries and binaries adapted from the VBAN specification by VB-
 byteorder = "1"
 
 # This dependency is only used on Linux
-alsa = "0.9.1"
+alsa = {version = "0.9.1", optional = true }
 clap = { version = "4.5.26", features = ["derive"] }
 opus = "0.3.0"
 log = "0.4.27"
@@ -19,16 +19,15 @@ pipewire = { version = "0.8.0" , features = [ "v0_3_43", "v0_3_44"], optional = 
 gtk = { version = "0.10.1", package = "gtk4", features = ["v4_14"], optional = true }
 
 [features]
-default = ["sender"]
-pipewire = ["dep:pipewire"]
-alsa = []
-gui = ["dep:gtk", "sender" ]
-sender = []
+default = []
+pipewire = [ "dep:pipewire" ]
+alsa = [ "dep:alsa" ]
+gui = [ "dep:gtk" ]
 recipient = []
 
 [[bin]]
 name = "vban_source"
-required-features = ["sender", "pipewire"]
+required-features = ["pipewire"]
 
 [[bin]]
 name = "vban_sink"
@@ -36,4 +35,4 @@ required-features = ["recipient", "alsa"]
 
 [[bin]]
 name = "vban_gui"
-required-features = ["sender", "gui", "pipewire"]
+required-features = ["gui", "pipewire"]
