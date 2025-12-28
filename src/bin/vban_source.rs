@@ -1,26 +1,33 @@
 
 use std::{net::{IpAddr, UdpSocket}, path::PathBuf, process::exit};
 use clap::Parser;
-use rvban::{vban_sender::VbanSender, VBanSampleRates, VBanBitResolution, VBanCodec};
+use rvban::{VBanSampleRates, VBanBitResolution, VBanCodec};
 use log::{error, debug};
 use simplelog::{Config, TermLogger};
+
+#[cfg(feature = "alsa")]
+use rvban::vban_sender_alsa::VbanSender ;
+
+#[cfg(feature = "pipewire")]
+use rvban::vban_sender_pw::VbanSender;
+
 
 #[derive(Parser)]
 struct Cli {
 
-    /// IP address of the receiver, e.g. 192.168.0.100
+    /// IP address of the receiver, e.g. 192.168.0.100 (defaults to 127.0.0.1)
     #[arg(short='i', long, default_value = "127.0.0.1")]
     peer_address : String,
 
-    /// Port of the receiver. Specify a port if you don't want to use the default port 6980.
+    /// Port of the receiver (defaults to 6980)
     #[arg(short='p', long, default_value_t = 6980)]
     peer_port : u16,
 
-    /// Specify a different stream name
+    /// Specify a stream name (defaults to "Stream1")
     #[arg(short='n', long, value_name = "NAME", default_value = "Stream1")]
     stream_name : String,
 
-    /// Sample rate
+    /// Sample rate (defaults to 48000)
     #[arg(short='r', long, default_value = "48000")]
     sample_rate : u32,
 
@@ -28,7 +35,7 @@ struct Cli {
     #[arg(short='l', long)]
     local_addr : Option<IpAddr>,
 
-    /// Specify a different port if you don't want to use port 6980
+    /// Specify a local port if you don't want the OS to choose one for you
     #[arg(short='o', long)]
     local_port : Option<u16>,
 
@@ -40,17 +47,13 @@ struct Cli {
     /// Name of the audio source, i.e. pipewire target application or ALSA (loopback) device
     source_name : Option<String>,
 
-    /// Encoder (Opus, PCM)
+    /// Encoder [Opus (default), PCM]
     #[arg(short, long, default_value = "opus")]
     encoder : String,
 
     /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
     #[arg(short='v', long)]
     log_level : Option<usize>,
-
-    #[arg(short, long)]
-    /// An audio backend to use (currently supported: alsa, pipewire)
-    backend : Option<String>
 }
 
 fn main() {
@@ -114,7 +117,7 @@ fn main() {
     if use_config {
         // todo: use a config
         local_ip = "127.0.0.1".parse().unwrap();
-        local_port = 6980;
+        local_port = 0;
         sample_rate = VBanSampleRates::SampleRate48000Hz;
     } else {
         local_ip = match cli.local_addr {
@@ -125,25 +128,7 @@ fn main() {
             },
         };
         local_port = match cli.local_port {
-            None => {
-                let mut port = 40101;
-                let mut tries = 0;
-                loop{
-                    if UdpSocket::bind((local_ip, port)).is_err(){
-                        if tries < 20 {
-                            debug!("Port {} cannot be used for UDP. Trying with different port...", port);
-                            port += 10;
-                            tries += 1;
-                        } else {
-                            error!("Giving up after {tries} tries to find an open UDP port to bind to");
-                            exit(-1)
-                        }
-                        continue;
-                    } else {
-                        break port;
-                    }
-                }
-            },
+            None => 0,
             Some(num) => {
                 debug!("Using local UDP port {num}.");
                 num
@@ -166,16 +151,10 @@ fn main() {
 
     let local_addr = (local_ip, local_port);
 
-    let mut vbs = match VbanSender::create(peer_addr, local_addr, cli.stream_name, 2, sample_rate, VBanBitResolution::VbanBitfmt16Int, source_name, encoder.into()){
-        None => {
-            println!("Error: Could not create VBAN Sender");
-            exit(1)
-        }
-        Some(sender) => sender
-    };
+
+    let mut vbs = VbanSender::create(peer_addr, local_addr, cli.stream_name, 2, sample_rate, VBanBitResolution::VbanBitfmt16Int, source_name, encoder.into()).expect("Error while initializing.");
 
     loop {
         vbs.handle();
     }
-
 }

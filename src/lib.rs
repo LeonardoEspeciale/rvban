@@ -2,20 +2,27 @@
 
 
 use core::{panic};
+use log::{error, trace, warn, debug};
+use byteorder::{ByteOrder, LittleEndian};
+
 #[cfg(feature = "pipewire")]
 use std::thread::JoinHandle;
-use alsa::{pcm::*, ValueOr};
-use alsa::Direction;
-use byteorder::{ByteOrder, LittleEndian};
-use log::{debug};
-use log::{error, trace, warn};
+
+#[cfg(feature = "alsa")]
+use alsa::{pcm::*, ValueOr, Direction};
+
 
 #[cfg(feature = "pipewire")]
 use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+#[cfg(feature = "recipient")]
 pub mod vban_recipient;
-pub mod vban_sender;
+#[cfg(feature = "pipewire")]
+pub mod vban_sender_pw;
+#[cfg(feature = "alsa")]
+pub mod vban_sender_alsa;
+
 
 
 const VBAN_HEADER_SIZE : usize = 4 + 1 + 1 + 1 + 1 + 16;
@@ -23,14 +30,20 @@ const VBAN_STREAM_NAME_SIZE : usize = 16;
 const VBAN_PROTOCOL_MAX_SIZE : usize = 1464;
 const VBAN_DATA_MAX_SIZE : usize = VBAN_PROTOCOL_MAX_SIZE - VBAN_HEADER_SIZE - VBAN_PACKET_COUNTER_BYTES;
 const VBAN_CHANNELS_MAX_NB : usize = 256;
-const VBAN_SAMPLES_MAX_NB : usize = 256;
+const VBAN_SAMPLES_MAX_NB : u16 = 256;
 
-
-const VBAN_PACKET_NUM_SAMPLES : usize = 256;  
+const _VBAN_PACKET_NUM_SAMPLES : usize = 256;  
 const VBAN_PACKET_MAX_SAMPLES : usize = 256;
 const VBAN_PACKET_HEADER_BYTES : usize = 24;  
 const VBAN_PACKET_COUNTER_BYTES : usize = 4;  
 const VBAN_PACKET_MAX_LEN_BYTES : usize = VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES + VBAN_DATA_MAX_SIZE;
+
+// OPUS
+/// Number of samples per channel per opus packet, may be one of 120, 240, 480, 960, 1920, 2880
+/// VBAN only allows a maximum of 256 samples per packet though
+const OPUS_FRAME_SIZE : usize = 240; 
+const OPUS_BITRATE : i32 = 320000;
+
 
 
 // ****************************************
@@ -464,11 +477,12 @@ pub trait VbanSink {
 // ****************************************
 //             ALSA SINK 
 // ****************************************
-
+#[cfg(feature = "alsa")]
 pub struct AlsaSink {
     pcm : PCM,
 }
 
+#[cfg(feature = "alsa")]
 impl AlsaSink {
 
     pub fn init(device : &str, num_channels : Option<u32>, sample_rate : Option<u32>) -> Option<Self> {
@@ -542,6 +556,7 @@ impl AlsaSink {
 
 }
 
+#[cfg(feature = "alsa")]
 impl VbanSink for AlsaSink {
 
     fn write(&self, buf : &[i16]){
@@ -584,11 +599,12 @@ pub trait VbanSource {
 // ****************************************
 //             ALSA SOURCE
 // ****************************************
-
+#[cfg(feature = "alsa")]
 struct AlsaSource {
     pcm : PCM
 }
 
+#[cfg(feature = "alsa")]
 impl AlsaSource {
 
     pub fn init(device : &str, num_channels : u32, sample_rate : u32) -> Option<Self> {
@@ -634,6 +650,7 @@ impl AlsaSource {
     }
 }
 
+#[cfg(feature = "alsa")]
 impl VbanSource for AlsaSource {
     fn read(&mut self, buf : &mut [i16]) {
         let io = match self.pcm.io_i16(){
@@ -662,8 +679,9 @@ struct PipewireSource {
     _handle : JoinHandle<Option<()>>
 }
 
+#[cfg(feature = "pipewire")]
 impl PipewireSource {
-    pub fn init(sample_rate: u32, target : Option<String>) -> Option<Self> {
+    pub fn init(num_channels : u32, sample_rate: u32, target : Option<String>) -> Option<Self> {
 
         // create arc/mutex of self and put data into self.data in seperate thread?
 
@@ -675,14 +693,14 @@ impl PipewireSource {
 
             remainder : Vec::<u8>::new(),
 
-            _handle : PipewireSource::get_pw_loop_handle(sample_rate, target, tx)
+            _handle : PipewireSource::get_pw_loop_handle(num_channels, sample_rate, target, tx)
         };
 
         Some(src)
 
     }
 
-    fn get_pw_loop_handle(sample_rate : u32, target : Option<String>, tx: Sender<Vec<u8>>) -> JoinHandle<Option<()>> {
+    fn get_pw_loop_handle(num_channels : u32, sample_rate : u32, target : Option<String>, tx: Sender<Vec<u8>>) -> JoinHandle<Option<()>> {
         std::thread::spawn(move ||{
 
                 let mainloop = match MainLoop::new(None){
@@ -751,7 +769,7 @@ impl PipewireSource {
                 let builder = spa::pod::builder::Builder::new(&mut pod_data);
                 let mut audio_info = spa::param::audio::AudioInfoRaw::new();
                 audio_info.set_format(AudioFormat::S16LE);
-                audio_info.set_channels(2);
+                audio_info.set_channels(num_channels);
                 audio_info.set_rate(sample_rate);
                 unsafe {
                     spa_format_audio_raw_build(builder.as_raw_ptr(), spa::sys::SPA_PARAM_EnumFormat, &mut audio_info.as_raw());
@@ -768,6 +786,7 @@ impl PipewireSource {
 
 }
 
+#[cfg(feature = "pipewire")]
 impl VbanSource for PipewireSource {
     fn read(&mut self, buf : &mut [i16]) {
 

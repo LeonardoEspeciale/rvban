@@ -3,20 +3,12 @@ use std::{net::{IpAddr, UdpSocket}, process::Command, usize};
 use byteorder::{ByteOrder, LittleEndian};
 use opus::{Channels, Encoder};
 use log::{error, info, trace};
-use crate::{AlsaSource, PipewireSource, VBanBitResolution, VBanCodec, VBanHeader, VBanSampleRates, VbanSource, VBAN_HEADER_SIZE, VBAN_PACKET_COUNTER_BYTES, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_MAX_LEN_BYTES, VBAN_PACKET_MAX_SAMPLES, VBAN_STREAM_NAME_SIZE};
-
-// OPUS
-/// Number of samples per channel per opus packet, may be one of 120, 240, 480, 960, 1920, 2880
-/// VBAN only allows a maximum of 256 samples per packet though
-const OPUS_FRAME_SIZE : usize = 240; 
-const OPUS_BITRATE : i32 = 320000;
-
+use crate::{PipewireSource, VBanBitResolution, VBanCodec, VBanHeader, VBanSampleRates, VbanSource, VBAN_HEADER_SIZE, VBAN_PACKET_COUNTER_BYTES, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_MAX_LEN_BYTES, VBAN_PACKET_MAX_SAMPLES, VBAN_STREAM_NAME_SIZE, OPUS_BITRATE, OPUS_FRAME_SIZE};
 
 
 // ****************************************
 //              VBAN SENDER
 // ****************************************
-
 pub struct VbanSender {
 
     peer : (IpAddr, u16),
@@ -108,7 +100,7 @@ impl VbanSender {
             }
         };
 
-        let source = match PipewireSource::init(sample_rate.into(), Some(source_name.clone())){
+        let source = match PipewireSource::init(numch as u32, sample_rate.into(), Some(source_name.clone())){
             None => {
                 error!("Could not create audio source");
                 return None;

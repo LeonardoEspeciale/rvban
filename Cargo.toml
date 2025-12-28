@@ -19,6 +19,21 @@ pipewire = { version = "0.8.0" , features = [ "v0_3_43", "v0_3_44"], optional = 
 gtk = { version = "0.10.1", package = "gtk4", features = ["v4_14"], optional = true }
 
 [features]
-default = ["pipewire", "gui"]
+default = ["sender"]
 pipewire = ["dep:pipewire"]
-gui = ["dep:gtk"]
+alsa = []
+gui = ["dep:gtk", "sender" ]
+sender = []
+recipient = []
+
+[[bin]]
+name = "vban_source"
+required-features = ["sender", "pipewire"]
+
+[[bin]]
+name = "vban_sink"
+required-features = ["recipient", "alsa"]
+
+[[bin]]
+name = "vban_gui"
+required-features = ["sender", "gui", "pipewire"]

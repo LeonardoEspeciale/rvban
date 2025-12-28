@@ -1,7 +1,8 @@
 use std::{net::IpAddr, path::PathBuf, process::Command};
 use simplelog::{TermLogger, Config};
+use log::{info, error};
 use rvban::{vban_recipient::VbanRecipient, VBanSampleRates};
-use clap::Parser;
+use clap::{Parser};
 
 /// VBAN sink - by Lennard Jönsson
 /// Receive VBAN UDP streams on port 6980 (default) and play them on your ALSA audio device.
@@ -38,7 +39,7 @@ struct Cli {
     #[arg(short='m', long, value_name = "script")]
     command : Option<String>,
 
-    /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
+    /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3 (Info)).
     #[arg(short, long)]
     log_level : Option<usize>,
 
@@ -55,11 +56,11 @@ fn main() -> Result<(), i32> {
     let ll = match cli.log_level {
         None => log::LevelFilter::Info,
         Some(0) => log::LevelFilter::Off,
-        Some(1) => log::LevelFilter::Trace,
-        Some(2) => log::LevelFilter::Debug,
+        Some(1) => log::LevelFilter::Error,
+        Some(2) => log::LevelFilter::Warn,
         Some(3) => log::LevelFilter::Info,
-        Some(4) => log::LevelFilter::Warn,
-        Some(5) => log::LevelFilter::Error,
+        Some(4) => log::LevelFilter::Debug,
+        Some(5) => log::LevelFilter::Trace,
         _ => {
             println!("Log level must be between 0 and 5. Using default.");
             log::LevelFilter::Info
@@ -92,21 +93,21 @@ fn main() -> Result<(), i32> {
         addr = match cli.addr {
             None => "0.0.0.0".parse().unwrap(),
             Some(addr) => {
-                println!("Using {addr} as address to bind to.");
+                info!("Using {addr} as address to bind to.");
                 addr
             },
         };
         port = match cli.port {
             None => 6980,
             Some(num) => {
-                println!("Using port {num}.");
+                info!("Using port {num}.");
                 num
             },
         };
         stream_name = match cli.stream_name {
             None => None,
             Some(name) => {
-                println!("Using {name} as stream name.");
+                info!("Using {name} as stream name.");
                 Some(name)
             },
         };
@@ -121,7 +122,7 @@ fn main() -> Result<(), i32> {
     addr, port, stream_name, None, Some(sr),
     device_name, cli.silence){
         None => {
-            println!("Could not create VBAN recipient.");
+            error!("Could not create VBAN recipient.");
             return Err(-1)
         },
         Some(_vbr) => {

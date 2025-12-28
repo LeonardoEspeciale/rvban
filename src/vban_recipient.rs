@@ -1,11 +1,10 @@
 
-
 use std::{net::{IpAddr, UdpSocket}, process::Command, str::from_utf8, time::{ Duration, Instant}, usize};
 use byteorder::{ByteOrder, LittleEndian};
 use opus::{Channels, Decoder};
 use log::{debug};
 use log::{trace, error, info, warn};
-use crate::{VBanSampleRates, VBanBitResolution,VBAN_STREAM_NAME_SIZE, PlayerState, AlsaSink, VBAN_PACKET_MAX_LEN_BYTES, VBanCodec, VBanProtocol, VBanHeader, VBAN_BIT_RESOLUTION_SIZE, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_COUNTER_BYTES, VBAN_SRLIST, VbanSink};
+use crate::{VBanSampleRates, VBanBitResolution,VBAN_STREAM_NAME_SIZE, PlayerState, AlsaSink, VBAN_PACKET_MAX_LEN_BYTES, VBanCodec, VBanProtocol, VBanHeader, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_COUNTER_BYTES, VBAN_SRLIST, VbanSink};
 
 
 pub struct VbanRecipient {
@@ -42,21 +41,21 @@ impl VbanRecipient {
 
     pub fn create(ip_addr : IpAddr, port: u16, stream_name : Option<String>, numch : Option<u8>, sample_rate : Option<VBanSampleRates>, sink_name : String, silence : Option<u32>) -> Option<Self> {
 
-        let mut _sn: Option<[u8; 16]> = match stream_name {
+        let sn: Option<[u8; 16]> = match stream_name {
             None => None,
             Some(name) => {
                 if name.len() > VBAN_STREAM_NAME_SIZE {
                     dbg!("Stream name exceeds the limit of {} characters", VBAN_STREAM_NAME_SIZE);
                     return None;
                 }
-                let mut _sn: [u8; 16] = [0u8; 16];
+                let mut sn: [u8; 16] = [0u8; 16];
                 for (idx, b) in name.bytes().enumerate(){
                     if idx >= VBAN_STREAM_NAME_SIZE {
                         break;
                     }
-                    _sn[idx] = b;
+                    sn[idx] = b;
                 }
-                Some(_sn)
+                Some(sn)
             }
         };
         
@@ -76,7 +75,7 @@ impl VbanRecipient {
             
             sample_format : None,
             
-            stream_name : _sn,
+            stream_name : sn,
 
             nu_frame : 0,
             
@@ -150,7 +149,12 @@ impl VbanRecipient {
             self.sample_format = Some(head.sample_format.into());
             
             let num_samples: u16 = head.num_samples as u16 + 1;
-            let bits_per_sample = VBAN_BIT_RESOLUTION_SIZE[self.sample_format.unwrap() as usize];
+            if num_samples > crate::VBAN_SAMPLES_MAX_NB - 1 {
+                debug!("Number of samples exceeds maximum of {}.", crate::VBAN_SAMPLES_MAX_NB);
+                return;
+            }
+
+            let bits_per_sample = crate::VBAN_BIT_RESOLUTION_SIZE[self.sample_format.unwrap() as usize];
             let codec = VBanCodec::from(head.sample_format);
             let protocol = VBanProtocol::from(head.sample_rate);
             let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
@@ -176,6 +180,11 @@ impl VbanRecipient {
             }
             
             let sr : VBanSampleRates  = head.sample_rate.into();
+
+            if head.num_channels > ( crate::VBAN_CHANNELS_MAX_NB - 1) as u8 {
+                debug!("Number of channels exceeds maximum of {}.", crate::VBAN_CHANNELS_MAX_NB);
+                return;
+            }
             self.num_channels = Some(head.num_channels + 1);
 
             match self.stream_name {
@@ -305,7 +314,7 @@ impl VbanRecipient {
             }
             let sink = self.sink.as_mut().unwrap();
             sink.write(&to_sink);
-            println!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
+            // println!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
         } else{
             debug!("Got UDP packet that is not VBAN");
         }

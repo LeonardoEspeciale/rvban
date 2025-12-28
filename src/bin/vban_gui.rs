@@ -10,7 +10,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::process::exit;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, sleep};
+use std::time::Duration;
 
 use pipewire::{context::Context, keys::{MEDIA_CLASS}, main_loop::MainLoop};
 
@@ -70,14 +71,14 @@ fn get_pw_app_names(name_list : &Arc<Mutex<Vec<String>>>){
                             Some(p) => p
                         };
 
-                        println!("{}", global.type_.to_str());
+                        // println!("{}", global.type_.to_str());
 
                         let class = match props.get(&MEDIA_CLASS){
                             None => return,
                             Some(class) => class
                         };
 
-                        println!("\t {}", class);
+                        // println!("\t {}", class);
 
                         if ! class.contains("Audio"){
                             return;
@@ -96,7 +97,7 @@ fn get_pw_app_names(name_list : &Arc<Mutex<Vec<String>>>){
                         if name.is_none(){
                             name = Some("Nameless app");
                         }
-                        
+
                         println!("\t Name: {}", name.unwrap());
                         // list.push(name.unwrap().clone());
                         list.lock().unwrap().push(name.unwrap().to_string());
@@ -151,9 +152,10 @@ fn load_css() {
     );
 }
 
+
 fn build_ui(app: &Application) {
 
-    let peer : Rc<Cell<(IpAddr, u16)>> = Rc::new(Cell::new((IpAddr::V4("127.0.0.1".parse().unwrap()), 6980)));
+    let peer : Rc<Cell<(IpAddr, u16)>> = Rc::new(Cell::new((IpAddr::V4("192.168.178.75".parse().unwrap()), 6980)));
     let local_addr = (IpAddr::V4("0.0.0.0".parse().unwrap()), 0); // default VBAN port
     let stream_name= String::from("Stream1");
     let numch = 2;
@@ -168,6 +170,9 @@ fn build_ui(app: &Application) {
     load_css();
 
     get_pw_app_names(&app_names);
+
+    // allow some time to register all applications
+    sleep(Duration::from_millis(200));
 
     let vbox = gtk::Box::builder()
     .orientation(gtk::Orientation::Vertical)
@@ -333,8 +338,8 @@ fn build_ui(app: &Application) {
 
     app_names_dd.connect_selected_item_notify(clone!(
         #[strong] source_name,
-        move |c| {
-        let num = c.selected();
+        move |dd_menu| {
+        let num = dd_menu.selected();
         *source_name.borrow_mut() = app_names.lock().unwrap()[num as usize].clone();
         eprintln!("Selected audio source: {}", num);
     }));
@@ -361,7 +366,7 @@ fn build_ui(app: &Application) {
             if toggle.is_active() {
                 println!("Activated");
 
-                let mut vbs = match rvban::vban_sender::VbanSender::create(peer.get(), local_addr, stream_name.clone(), numch, sample_rate.get(), format, source_name.borrow().to_string(), encoder.get()) {
+                let mut vbs = match rvban::vban_sender_pw::VbanSender::create(peer.get(), local_addr, stream_name.clone(), numch, sample_rate.get(), format, source_name.borrow().to_string(), encoder.get()) {
                     None => {
                             println!("Error: Could not create VBAN Sender");
                             return;
