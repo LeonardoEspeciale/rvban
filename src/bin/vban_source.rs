@@ -32,27 +32,27 @@ struct Cli {
     sample_rate : u32,
 
     /// Specify an IP-address if you don't want to bind to all interfaces
-    #[arg(short='l', long)]
+    #[arg(short='a', long)]
     local_addr : Option<IpAddr>,
 
     /// Specify a local port if you don't want the OS to choose one for you
     #[arg(short='o', long)]
     local_port : Option<u16>,
 
-    /// Use a config file
+    /// Use a config file (currently not supported)
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    #[arg(short, long)]
-    /// Name of the audio source, i.e. pipewire target application or ALSA (loopback) device
-    source_name : Option<String>,
+    #[arg(short, long, default_value = "spotify")]
+    /// Name of the audio source, i.e. pipewire target application or ALSA (loopback) device (defaults to "spotify")
+    source_name : String,
 
     /// Encoder [Opus (default), PCM]
     #[arg(short, long, default_value = "opus")]
     encoder : String,
 
     /// Set a log level for terminal printouts (0 = Off, 5 = Trace, default = 3).
-    #[arg(short='v', long)]
+    #[arg(short='l', long)]
     log_level : Option<usize>,
 }
 
@@ -67,11 +67,11 @@ fn main() {
     let ll = match cli.log_level {
         None => log::LevelFilter::Info,
         Some(0) => log::LevelFilter::Off,
-        Some(1) => log::LevelFilter::Trace,
-        Some(2) => log::LevelFilter::Debug,
+        Some(1) => log::LevelFilter::Error,
+        Some(2) => log::LevelFilter::Warn,
         Some(3) => log::LevelFilter::Info,
-        Some(4) => log::LevelFilter::Warn,
-        Some(5) => log::LevelFilter::Error,
+        Some(4) => log::LevelFilter::Debug,
+        Some(5) => log::LevelFilter::Trace,
         _ => {
             println!("Log level must be between 0 and 5. Using default.");
             log::LevelFilter::Info
@@ -142,15 +142,11 @@ fn main() {
         }
         debug!("Using sample rate of {}", sample_rate);
 
-        source_name = match cli.source_name {
-            None => "spotify".to_string(),
-            Some(str) => str
-        };
+        source_name = cli.source_name;
        
     }
 
     let local_addr = (local_ip, local_port);
-
 
     let mut vbs = VbanSender::create(peer_addr, local_addr, cli.stream_name, 2, sample_rate, VBanBitResolution::VbanBitfmt16Int, source_name, encoder.into()).expect("Error while initializing.");
 
