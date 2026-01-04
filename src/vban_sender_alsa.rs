@@ -220,7 +220,7 @@ impl VbanSender {
             Err(e) => error!("Error while sending data via socket: {e}")
         }
 
-        self.nu_frame += 1;
+        self.nu_frame.wrapping_add(1);
     }
 
 

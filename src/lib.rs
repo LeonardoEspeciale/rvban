@@ -2,7 +2,6 @@
 
 
 use core::{panic};
-use log::{error, trace, warn, debug};
 use byteorder::{ByteOrder, LittleEndian};
 
 #[cfg(feature = "pipewire")]
@@ -14,7 +13,6 @@ use alsa::{pcm::*, ValueOr, Direction};
 
 #[cfg(feature = "pipewire")]
 use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
-use std::sync::mpsc::{channel, Receiver, Sender};
 
 #[cfg(feature = "recipient")]
 pub mod vban_recipient;
