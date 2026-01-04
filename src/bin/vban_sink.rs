@@ -4,7 +4,7 @@ use log::{info, error};
 use rvban::{vban_recipient::VbanRecipient, VBanSampleRates};
 use clap::{Parser};
 
-/// VBAN sink - by Lennard Jönsson
+/// VBAN Sink - by Lennard Jönsson 
 /// Receive VBAN UDP streams on port 6980 (default) and play them on your ALSA audio device.
 /// All credit for developing the VBAN protocol goes to vb-audio.com.
 

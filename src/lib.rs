@@ -3,6 +3,7 @@
 
 use core::{panic};
 use byteorder::{ByteOrder, LittleEndian};
+use log::{trace, debug, info, warn, error};
 
 #[cfg(feature = "pipewire")]
 use std::thread::JoinHandle;
