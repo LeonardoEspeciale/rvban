@@ -106,9 +106,8 @@ impl VbanRecipient {
 
     pub fn handle(&mut self){
         let mut buf :[u8; VBAN_PACKET_MAX_LEN_BYTES] = [0; VBAN_PACKET_MAX_LEN_BYTES];
-        let packet = self.socket.recv_from(&mut buf);
-        // let buf = Vec::from(buf);
         
+        // close PCM after 2 seconds of not receiving any audio data
         if self.state == PlayerState::Playing && self.timer.elapsed().as_secs() > 2 {
             self.state = PlayerState::Idle;
             
@@ -131,6 +130,8 @@ impl VbanRecipient {
                 Some(cmd) => _ = cmd.arg("playback_stopped").output(),
             }
         }
+
+        let packet = self.socket.recv_from(&mut buf);
         
         let size = match packet {
             Ok((size, _addr)) => {
@@ -149,8 +150,8 @@ impl VbanRecipient {
             self.sample_format = Some(head.sample_format.into());
             
             let num_samples: u16 = head.num_samples as u16 + 1;
-            if num_samples > crate::VBAN_SAMPLES_MAX_NB - 1 {
-                debug!("Number of samples exceeds maximum of {}.", crate::VBAN_SAMPLES_MAX_NB);
+            if num_samples > crate::VBAN_SAMPLES_MAX_NB {
+                debug!("Number of samples exceeds maximum of {} (found {}).", crate::VBAN_SAMPLES_MAX_NB, num_samples);
                 return;
             }
 
@@ -191,7 +192,7 @@ impl VbanRecipient {
                 None => (),
                 Some(name) => {
                     if from_utf8(&name).unwrap() != name_incoming {
-                        debug!("Discarding packet because stream names don't match.");
+                        debug!("Discarding packet because stream names don't match (found {name_incoming}.");
                         return;
                     }
                 }
