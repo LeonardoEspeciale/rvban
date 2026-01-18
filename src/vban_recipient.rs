@@ -147,179 +147,179 @@ impl VbanRecipient {
             return;
         }
             
-            let head : [u8; 28] = buf[0..28].try_into().unwrap();
-            let head = VBanHeader::from(head);
-            
-            self.sample_format = Some(head.sample_format.into());
-            
-            let num_samples: u16 = head.num_samples as u16 + 1;
-            if num_samples > crate::VBAN_SAMPLES_MAX_NB {
-                debug!("Number of samples exceeds maximum of {} (found {}).", crate::VBAN_SAMPLES_MAX_NB, num_samples);
-                return;
-            }
+        let head : [u8; 28] = buf[0..28].try_into().unwrap();
+        let head = VBanHeader::from(head);
+        
+        self.sample_format = Some(head.sample_format.into());
+        
+        let num_samples: u16 = head.num_samples as u16 + 1;
+        if num_samples > crate::VBAN_SAMPLES_MAX_NB {
+            debug!("Number of samples exceeds maximum of {} (found {}).", crate::VBAN_SAMPLES_MAX_NB, num_samples);
+            return;
+        }
 
-            let bits_per_sample = crate::VBAN_BIT_RESOLUTION_SIZE[self.sample_format.unwrap() as usize];
-            let codec = VBanCodec::from(head.sample_format);
-            let protocol = VBanProtocol::from(head.sample_rate);
-            let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
+        let bits_per_sample = crate::VBAN_BIT_RESOLUTION_SIZE[self.sample_format.unwrap() as usize];
+        let codec = VBanCodec::from(head.sample_format);
+        let protocol = VBanProtocol::from(head.sample_rate);
+        let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
         let frame_counter = head.nu_frame;
-
+        
         trace!("VBAN - Frame {}, #smp {}, bps {}, codec {}, name {}", frame_counter, num_samples, bits_per_sample, codec, name_incoming);
-            
-            if protocol != VBanProtocol::VbanProtocolAudio {
-                debug!("Discarding packet with protocol {:?} because it is not supported.", protocol);
+        
+        if protocol != VBanProtocol::VbanProtocolAudio {
+            debug!("Discarding packet with protocol {:?} because it is not supported.", protocol);
+            return;
+        }
+        match codec {
+            VBanCodec::VbanCodecPcm => (),
+            VBanCodec::VbanCodecOpus(_) => (),
+            _ => {
+                error!("Any codecs other than PCM and OPUS are not supported (found {:?}).", codec);
                 return;
             }
-            match codec {
-                VBanCodec::VbanCodecPcm => (),
-                VBanCodec::VbanCodecOpus(_) => (),
-                _ => {
-                    error!("Any codecs other than PCM and OPUS are not supported (found {:?}).", codec);
+
+        }
+        if bits_per_sample != 2{
+            error!("Bitwidth other than 16 bits not supported (found {}).", bits_per_sample * 8);
+            return;
+        }
+        
+        let sr : VBanSampleRates  = head.sample_rate.into();
+
+        if head.num_channels > ( crate::VBAN_CHANNELS_MAX_NB - 1) as u8 {
+            debug!("Number of channels exceeds maximum of {}.", crate::VBAN_CHANNELS_MAX_NB);
+            return;
+        }
+        self.num_channels = Some(head.num_channels + 1);
+
+        match self.stream_name {
+            None => (),
+            Some(name) => {
+                if from_utf8(&name).unwrap() != name_incoming {
+                    debug!("Discarding packet because stream names don't match (found {name_incoming}.");
                     return;
                 }
-
             }
-            if bits_per_sample != 2{
-                error!("Bitwidth other than 16 bits not supported (found {}).", bits_per_sample * 8);
-                return;
-            }
-            
-            let sr : VBanSampleRates  = head.sample_rate.into();
+        }
 
-            if head.num_channels > ( crate::VBAN_CHANNELS_MAX_NB - 1) as u8 {
-                debug!("Number of channels exceeds maximum of {}.", crate::VBAN_CHANNELS_MAX_NB);
-                return;
-            }
-            self.num_channels = Some(head.num_channels + 1);
+        let audio_data : Vec<u8> = Vec::from(&buf[VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES..size]);
+        let mut to_sink : Vec<i16>;
+        let mut left : i16 = 0;
+        let mut right : i16 = 0;
 
-            match self.stream_name {
-                None => (),
-                Some(name) => {
-                    if from_utf8(&name).unwrap() != name_incoming {
-                        debug!("Discarding packet because stream names don't match (found {name_incoming}.");
-                        return;
-                    }
-                }
-            }
+        match codec{
+            VBanCodec::VbanCodecPcm => {
+                to_sink = vec![0; audio_data.len() / bits_per_sample as usize];
 
-            let audio_data : Vec<u8> = Vec::from(&buf[VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES..size]);
-            let mut to_sink : Vec<i16>;
-            let mut left : i16 = 0;
-            let mut right : i16 = 0;
-
-            match codec{
-                VBanCodec::VbanCodecPcm => {
-                    to_sink = vec![0; audio_data.len() / bits_per_sample as usize];
-
-                    for (idx, _smp) in audio_data.iter().enumerate() {
-                        if idx % 2 == 1 {
-                            continue;
-                        }
-
-                        if idx == audio_data.len() - 1 {
-                            break;
-                        }
-
-                        let amplitude_le = LittleEndian::read_i16(&audio_data[idx..idx+2]);
-
-                        if idx % 4 == 0 {
-                            if amplitude_le > left {
-                                left = amplitude_le;
-                            }
-                        } else {
-                            if amplitude_le > right {
-                                right = amplitude_le;
-                            }
-                        }
-
-                        to_sink[idx / 2] = amplitude_le;
-                    }
-                }
-
-                VBanCodec::VbanCodecOpus(_) => {
-                    if self.decoder.is_none(){
-
-                        let opus_ch = match self.num_channels.unwrap() {
-                            1 => Channels::Mono,
-                            2 => Channels::Stereo,
-                            _ => {
-                                error!("Error: Opus cannot handle {} channels", self.num_channels.unwrap());
-                                return;
-                            }
-                        };
-
-                        self.decoder = match Decoder::new(sr.into(), opus_ch){
-                            Ok(d) => Some(d),
-                            Err(e) => {
-                                error!("Error while trying to create an opus decoder: {e}");
-                                return;
-                            }
-                        };
+                for (idx, _smp) in audio_data.iter().enumerate() {
+                    if idx % 2 == 1 {
+                        continue;
                     }
 
-                    let dec = self.decoder.as_mut().unwrap();
-                    let opus_num_samples = dec.get_nb_samples(&audio_data).unwrap(); // TODO: needs proper error handling
+                    if idx == audio_data.len() - 1 {
+                        break;
+                    }
 
-                    to_sink = vec![0; 2 * num_samples as usize];
-                    dec.decode(&audio_data, &mut to_sink, false).unwrap();
+                    let amplitude_le = LittleEndian::read_i16(&audio_data[idx..idx+2]);
 
-                    for (idx, ampl) in to_sink.iter().enumerate(){
-                        if idx % 2 == 0 {
-                            if *ampl > left {
-                                left = *ampl;
-                            }
-                        } else {
-                            if *ampl > right {
-                                right = *ampl;
-                            }
+                    if idx % 4 == 0 {
+                        if amplitude_le > left {
+                            left = amplitude_le;
+                        }
+                    } else {
+                        if amplitude_le > right {
+                            right = amplitude_le;
                         }
                     }
 
+                    to_sink[idx / 2] = amplitude_le;
                 }
-
-                _ => return // we've already caught that case above
             }
 
-            self.timer = Instant::now();
-            if self.state == PlayerState::Idle {
-                match &self.sink {
-                    Some(_sink) => error!("Something's wrong. Sink is Some() although it should be None"),
-                    None => {
-                        self.sample_rate = Some(sr);
-                        self.sink = match AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())){
-                            None => {
-                                warn!("Could not grab audio device");
-                                return
-                            },
-                            Some(sink) => {
-                                trace!("Successfully initialized ALSA device with {} channels at {} Hz", self.num_channels(), self.sample_rate());
-                                Some(sink)
-                            }
-                        };
+            VBanCodec::VbanCodecOpus(_) => {
+                if self.decoder.is_none(){
 
-                        info!("Connected to stream {}: \nSR: {} \t Ch: {} \t BPS: {} \t Codec: {}\n", name_incoming, self.sample_rate(), self.num_channels(), self.bits_per_sample(), codec);
+                    let opus_ch = match self.num_channels.unwrap() {
+                        1 => Channels::Mono,
+                        2 => Channels::Stereo,
+                        _ => {
+                            error!("Error: Opus cannot handle {} channels", self.num_channels.unwrap());
+                            return;
+                        }
+                    };
 
-                        /* Push silence before the data */
-                        let silence_buf = vec![0i16; (self.sample_rate() / 1000 * self.silence) as usize];
-                        self.sink.as_mut().unwrap().write(&silence_buf);
+                    self.decoder = match Decoder::new(sr.into(), opus_ch){
+                        Ok(d) => Some(d),
+                        Err(e) => {
+                            error!("Error while trying to create an opus decoder: {e}");
+                            return;
+                        }
+                    };
+                }
+
+                let dec = self.decoder.as_mut().unwrap();
+                let opus_num_samples = dec.get_nb_samples(&audio_data).unwrap(); // TODO: needs proper error handling
+
+                to_sink = vec![0; 2 * num_samples as usize];
+                dec.decode(&audio_data, &mut to_sink, false).unwrap();
+
+                for (idx, ampl) in to_sink.iter().enumerate(){
+                    if idx % 2 == 0 {
+                        if *ampl > left {
+                            left = *ampl;
+                        }
+                    } else {
+                        if *ampl > right {
+                            right = *ampl;
+                        }
                     }
                 }
-                match &mut self.command {
-                    None => (),
-                    Some(cmd) => _ = cmd.arg("playback_started").output(),
-                }
-                self.state = PlayerState::Playing;
-            } else {
-                if sr != self.sample_rate.unwrap(){
+
+            }
+
+            _ => return // we've already caught that case above
+        }
+
+        self.timer = Instant::now();
+        if self.state == PlayerState::Idle {
+            match &self.sink {
+                Some(_sink) => error!("Something's wrong. Sink is Some() although it should be None"),
+                None => {
                     self.sample_rate = Some(sr);
-                    let sink = self.sink.as_mut().unwrap();
-                    let _ = sink.pcm.drain();
-                    self.sink = Some(AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())).expect("Could not create audio device with the required specs."));
+                    self.sink = match AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())){
+                        None => {
+                            warn!("Could not grab audio device");
+                            return
+                        },
+                        Some(sink) => {
+                            trace!("Successfully initialized ALSA device with {} channels at {} Hz", self.num_channels(), self.sample_rate());
+                            Some(sink)
+                        }
+                    };
+
+                    info!("Connected to stream {}: \nSR: {} \t Ch: {} \t BPS: {} \t Codec: {}\n", name_incoming, self.sample_rate(), self.num_channels(), self.bits_per_sample(), codec);
+
+                    /* Push silence before the data */
+                    let silence_buf = vec![0i16; (self.sample_rate() / 1000 * self.silence) as usize];
+                    self.sink.as_mut().unwrap().write(&silence_buf);
                 }
             }
-            let sink = self.sink.as_mut().unwrap();
-            sink.write(&to_sink);
-            // println!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
+            match &mut self.command {
+                None => (),
+                Some(cmd) => _ = cmd.arg("playback_started").output(),
+            }
+            self.state = PlayerState::Playing;
+        } else {
+            if sr != self.sample_rate.unwrap(){
+                self.sample_rate = Some(sr);
+                let sink = self.sink.as_mut().unwrap();
+                let _ = sink.pcm.drain();
+                self.sink = Some(AlsaSink::init(&self.sink_name, Some(self.num_channels() as u32), Some(self.sample_rate())).expect("Could not create audio device with the required specs."));
+            }
+        }
+        let sink = self.sink.as_mut().unwrap();
+        sink.write(&to_sink);
+        // println!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
     }
 
 
