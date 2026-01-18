@@ -142,7 +142,10 @@ impl VbanRecipient {
 
         trace!("UDP packet len {} from {}", size, packet.unwrap().1);
 
-        if buf[..4] == *b"VBAN" {
+        if buf[..4] != *b"VBAN" {
+            debug!("Got UDP packet that is not VBAN");
+            return;
+        }
             
             let head : [u8; 28] = buf[0..28].try_into().unwrap();
             let head = VBanHeader::from(head);
@@ -159,8 +162,9 @@ impl VbanRecipient {
             let codec = VBanCodec::from(head.sample_format);
             let protocol = VBanProtocol::from(head.sample_rate);
             let name_incoming : &str = from_utf8(&head.stream_name).unwrap();
+        let frame_counter = head.nu_frame;
 
-            trace!("VBAN - #smp {}, bps {}, codec {}, name {}", num_samples, bits_per_sample, codec, name_incoming);
+        trace!("VBAN - Frame {}, #smp {}, bps {}, codec {}, name {}", frame_counter, num_samples, bits_per_sample, codec, name_incoming);
             
             if protocol != VBanProtocol::VbanProtocolAudio {
                 debug!("Discarding packet with protocol {:?} because it is not supported.", protocol);
@@ -316,9 +320,6 @@ impl VbanRecipient {
             let sink = self.sink.as_mut().unwrap();
             sink.write(&to_sink);
             // println!("\x1B[1ALeft {:.4}, Right {:.4} (from {num_samples} samples)", (left as f32 / i16::MAX as f32), (right as f32 / i16::MAX as f32));
-        } else{
-            debug!("Got UDP packet that is not VBAN");
-        }
     }
 
 
