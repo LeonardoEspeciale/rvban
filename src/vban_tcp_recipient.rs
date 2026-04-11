@@ -1,15 +1,19 @@
 
-use std::{net::{IpAddr, UdpSocket}, process::Command, str::from_utf8, time::{ Duration, Instant}, usize};
-use byteorder::{ByteOrder, LittleEndian};
+use std::{net::{IpAddr, TcpListener}, process::Command, str::from_utf8, time::{ Duration, Instant}, usize, io::Read};
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use opus::{Channels, Decoder};
 use log::{debug};
 use log::{trace, error, info, warn};
-use crate::{VBanSampleRates, VBanBitResolution,VBAN_STREAM_NAME_SIZE, PlayerState, AlsaSink, VBAN_PACKET_MAX_LEN_BYTES, VBanCodec, VBanProtocol, VBanHeader, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_COUNTER_BYTES, VBAN_SRLIST, VbanSink};
+use crate::{VBanSampleRates, VBanBitResolution,VBAN_STREAM_NAME_SIZE, PlayerState, VBAN_PACKET_MAX_LEN_BYTES, VBanCodec, VBanProtocol, VBanHeader, VBAN_PACKET_HEADER_BYTES, VBAN_PACKET_COUNTER_BYTES, VBAN_SRLIST, VbanSink};
 
+#[cfg(feature = "alsa")]
+use crate::{AlsaSink};
 
 pub struct VbanRecipient {
 
-    socket : UdpSocket,
+    socket : TcpListener,
+
+    connection : Option<std::net::TcpStream>,
 
     sample_rate : Option<VBanSampleRates>,
 
@@ -61,13 +65,18 @@ impl VbanRecipient {
         
         let to_addr = (ip_addr, port);
         let result  = VbanRecipient{
-            socket :  match UdpSocket::bind(to_addr){
-                Ok(sock) => sock,
+            socket :  match TcpListener::bind(to_addr){
+                Ok(sock) => {
+                    sock.set_nonblocking(true).expect("Could not set socket to non-blocking.");
+                    sock
+                },
                 Err(_) => {
                     dbg!("Could not create socket");
                     return None;
                 },
             },
+
+            connection : None,
             
             sample_rate : sample_rate,
             
@@ -96,8 +105,6 @@ impl VbanRecipient {
 
             decoder : None
         };
-
-        result.socket.set_read_timeout(Some(Duration::new(1, 0))).expect("Could not set timeout of socket");
 
         info!("VBAN recepipient ready. Waiting for incoming audio packets...");
         Some(result)
@@ -131,19 +138,54 @@ impl VbanRecipient {
             }
         }
 
-        let packet = self.socket.recv_from(&mut buf);
+        let connection = match self.connection.as_mut() {
+            None => {
+                match self.socket.accept(){
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // no incoming connection, just return and try again later
+                        return;
+                    },
+                    Err(e) => {
+                        error!("Error while accepting incoming connection: {e}");
+                        return;
+                    },
+                    Ok((conn, addr)) => {
+                        info!("Accepted incoming connection from {addr}");
+                        conn.set_read_timeout(Some(Duration::from_secs(1))).expect("Cannot set read timeout of TCP connection to 1 second");
+                        self.connection = Some(conn);
+                        self.connection.as_mut().unwrap()
+                    }
+                }
+            }
+            Some(_) => {
+                // discard all other incoming connections
+                match self.socket.accept() {
+                    Ok(c) => {
+                        c.0.shutdown(std::net::Shutdown::Both).unwrap();
+                        self.connection.as_mut().unwrap()
+                    }
+                    Err(_) => self.connection.as_mut().unwrap()
+                }
+            }
+        };
+        
+        let packet = connection.read(&mut buf);
+        // let packet = self.socket.recv_from(&mut buf);
         
         let size = match packet {
-            Ok((size, _addr)) => {
+            Ok(size) => {
                 size
             },
-            _ => return,
+            Err(e) => {
+                println!("Error while reading from TCP connection: {e}");
+                return;
+            }
         };
 
-        trace!("UDP packet len {} from {}", size, packet.unwrap().1);
+        trace!("TCP packet len {} ", size);
 
         if buf[..4] != *b"VBAN" {
-            debug!("Got UDP packet that is not VBAN");
+            debug!("Got TCP packet that is not VBAN");
             return;
         }
             

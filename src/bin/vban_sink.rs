@@ -1,8 +1,14 @@
 use std::{net::IpAddr, path::PathBuf, process::Command};
 use simplelog::{TermLogger, Config};
 use log::{info, error};
-use rvban::{vban_recipient::VbanRecipient, VBanSampleRates};
 use clap::{Parser};
+
+#[cfg(feature = "udp")]
+use rvban::{vban_recipient::VbanRecipient, VBanSampleRates};
+
+#[cfg(feature = "tcp")]
+use rvban::{vban_tcp_recipient::VbanRecipient, VBanSampleRates};
+
 
 /// VBAN Sink - by Lennard Jönsson 
 /// Receive VBAN UDP streams on port 6980 (default) and play them on your ALSA audio device.

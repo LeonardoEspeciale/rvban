@@ -11,19 +11,21 @@ use std::{thread::JoinHandle, sync::mpsc::{Sender, Receiver, channel}};
 #[cfg(feature = "alsa")]
 use alsa::{pcm::*, ValueOr, Direction};
 
-
 #[cfg(feature = "pipewire")]
 use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
 
-#[cfg(feature = "recipient")]
+#[cfg(feature = "udp")]
 pub mod vban_recipient;
 
-#[cfg(feature = "pipewire")]
+#[cfg(all(feature = "udp", feature = "pipewire"))]
 pub mod vban_sender_pw;
-#[cfg(feature = "alsa")]
+#[cfg(all(feature = "udp", feature = "alsa"))]
 pub mod vban_sender_alsa;
 
-
+#[cfg(all(feature = "tcp", feature = "recipient"))]
+pub mod vban_tcp_recipient;
+#[cfg(all(feature = "tcp", feature = "pipewire"))]
+pub mod vban_tcp_sender_pw;
 
 const VBAN_HEADER_SIZE : usize = 4 + 1 + 1 + 1 + 1 + 16;
 const VBAN_STREAM_NAME_SIZE : usize = 16;
@@ -64,9 +66,6 @@ struct VBanHeader {
 impl From<[u8; 28]> for VBanHeader {
     fn from (item: [u8; 28]) -> Self {
 
-        // let frame_count : u32 = item[24] as u32 + (item[25] as u32) << 8 + (item[26] as u32) << 16 + (item[27] as u32) << 24;
-        let frame_count  = 0;
-
         Self {
             preamble : item[0..4].try_into().unwrap(),
             sample_rate : item[4],
@@ -74,7 +73,7 @@ impl From<[u8; 28]> for VBanHeader {
             num_channels : item[6],
             sample_format : item[7],
             stream_name : [item[8], item[9], item[10], item[11], item[12], item[13], item[14], item[15], item[16], item[17], item[18], item[19], item[20], item[21], item[22], item[23]],
-            nu_frame : frame_count
+            nu_frame : u32::from_le_bytes([item[24], item[25], item[26], item[27]])
         }
     }
 }
@@ -493,20 +492,11 @@ impl AlsaSink {
             },
         };
 
-        let num_channels = match num_channels {
-            None => {2},
-            Some(ch) => ch,
-        };
-        let rate = match sample_rate {
-            None => 44100,
-            Some(r) => r,
-        };
-
         {
             let hwp = HwParams::any(&sink.pcm).expect("Could not get hwp.");
 
-            hwp.set_channels(num_channels).expect("Could not set channel number.");
-            hwp.set_rate(rate, ValueOr::Nearest).expect("Could not set sample rate.");
+            hwp.set_channels(num_channels.unwrap_or(2)).expect("Could not set channel number.");
+            hwp.set_rate(sample_rate.unwrap_or(44100), ValueOr::Nearest).expect("Could not set sample rate.");
             hwp.set_format(Format::s16()).expect("Could not set sample format.");
             hwp.set_access(Access::RWInterleaved).expect("Could not set access.");
             sink.pcm.hw_params(&hwp).expect("Could not attach hwp to PCM.");

@@ -8,7 +8,7 @@ use pipewire::keys::{APP_NAME, NODE_DESCRIPTION, NODE_NAME, NODE_NICK};
 use std::net::IpAddr;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::process::exit;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, sleep};
 use std::time::Duration;
@@ -163,7 +163,8 @@ fn build_ui(app: &Application) {
     let format= rvban::VBanBitResolution::VbanBitfmt16Int;
     let source_name = Rc::new(RefCell::new(String::from("spotify")));
     let encoder  = Rc::new(Cell::new(VBanCodec::VbanCodecPcm.into()));
-    let handle = Rc::new(RefCell::new(Option::<std::thread::JoinHandle<()>>::None));
+    let handle = Arc::new(Mutex::new(Option::<std::thread::JoinHandle<()>>::None));
+    let vban_state = Arc::new(AtomicBool::new(false));
 
     let app_names = Arc::new(Mutex::new(Vec::new()));
     
@@ -374,13 +375,19 @@ fn build_ui(app: &Application) {
                     Some(sender) => sender
                 };
 
+                vban_state.compare_exchange(false, true, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+                let vban_state_wk = Arc::<AtomicBool>::downgrade(&vban_state);
                 let new_handle = std::thread::spawn(move || {
                     loop {
                         vbs.handle();
+                        if vban_state_wk.upgrade().unwrap().load(std::sync::atomic::Ordering::Relaxed) == false {
+                            println!("Closing handle loop");
+                            break;
+                        }
                     }
                 });
 
-                handle.borrow_mut().replace(new_handle);
+                handle.lock().unwrap().replace(new_handle);
 
                 entry.set_sensitive(false);
                 combo.set_sensitive(false);
@@ -388,18 +395,23 @@ fn build_ui(app: &Application) {
                 app_names_dd.set_sensitive(false);
 
 
-                toggle.set_label("Quit");
+                toggle.set_label("Stop");
                 toggle.remove_css_class("toggle-inactive");
                 toggle.add_css_class("toggle-active");
             } else {
+                vban_state.compare_exchange(true, false, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+
+                handle.lock().unwrap().take().unwrap().join().unwrap();
+
                 toggle.set_label("Activate");
                 toggle.remove_css_class("toggle-active");
                 toggle.add_css_class("toggle-inactive");
-                println!("Deactivated");
 
-                if handle.borrow().is_some(){
-                    exit(0);
-                }
+                entry.set_sensitive(true);
+                combo.set_sensitive(true);
+                r1.set_sensitive(true);
+                app_names_dd.set_sensitive(true);
+                println!("Deactivated");
             }
         }
     ));

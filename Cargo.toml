@@ -19,19 +19,21 @@ pipewire = { version = "0.8.0" , features = [ "v0_3_43", "v0_3_44"], optional = 
 gtk = { version = "0.10.1", package = "gtk4", features = ["v4_14"], optional = true }
 
 [features]
-default = []
+default = [ "pipewire" , "tcp" ]
 pipewire = [ "dep:pipewire" ]
 alsa = [ "dep:alsa" ]
 gui = [ "dep:gtk" ]
-recipient = []
+recipient = [ "tcp", "alsa" ]
+tcp = []
+udp = []
 
 [[bin]]
 name = "vban_source"
-required-features = ["pipewire"]
+required-features = [ "pipewire", "tcp" ]
 
 [[bin]]
 name = "vban_sink"
-required-features = ["recipient", "alsa"]
+required-features = ["recipient", "alsa", "tcp" ]
 
 [[bin]]
 name = "vban_gui"
