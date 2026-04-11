@@ -204,9 +204,8 @@ impl VbanRecipient {
 
         let audio_data : Vec<u8> = Vec::from(&buf[VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES..size]);
         let mut to_sink : Vec<i16>;
-        let mut left : i16 = 0;
-        let mut right : i16 = 0;
 
+        // handle the received data differently depending on the codec and populate the to_sink buffer
         match codec{
             VBanCodec::VbanCodecPcm => {
                 to_sink = vec![0; audio_data.len() / bits_per_sample as usize];
@@ -220,19 +219,7 @@ impl VbanRecipient {
                         break;
                     }
 
-                    let amplitude_le = LittleEndian::read_i16(&audio_data[idx..idx+2]);
-
-                    if idx % 4 == 0 {
-                        if amplitude_le > left {
-                            left = amplitude_le;
-                        }
-                    } else {
-                        if amplitude_le > right {
-                            right = amplitude_le;
-                        }
-                    }
-
-                    to_sink[idx / 2] = amplitude_le;
+                    to_sink[idx / 2] = LittleEndian::read_i16(&audio_data[idx..idx+2]);
                 }
             }
 
@@ -262,19 +249,6 @@ impl VbanRecipient {
 
                 to_sink = vec![0; 2 * num_samples as usize];
                 dec.decode(&audio_data, &mut to_sink, false).unwrap();
-
-                for (idx, ampl) in to_sink.iter().enumerate(){
-                    if idx % 2 == 0 {
-                        if *ampl > left {
-                            left = *ampl;
-                        }
-                    } else {
-                        if *ampl > right {
-                            right = *ampl;
-                        }
-                    }
-                }
-
             }
 
             _ => return // we've already caught that case above
