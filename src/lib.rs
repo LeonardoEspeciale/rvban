@@ -6,7 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{trace, debug, info, warn, error};
 
 #[cfg(feature = "pipewire")]
-use std::thread::JoinHandle;
+use std::{thread::JoinHandle, sync::mpsc::{Sender, Receiver, channel}};
 
 #[cfg(feature = "alsa")]
 use alsa::{pcm::*, ValueOr, Direction};
