@@ -11,19 +11,21 @@ use std::thread::JoinHandle;
 #[cfg(feature = "alsa")]
 use alsa::{pcm::*, ValueOr, Direction};
 
-
 #[cfg(feature = "pipewire")]
 use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
 
-#[cfg(feature = "recipient")]
+#[cfg(feature = "udp")]
 pub mod vban_recipient;
 
-#[cfg(feature = "pipewire")]
+#[cfg(all(feature = "udp", feature = "pipewire"))]
 pub mod vban_sender_pw;
-#[cfg(feature = "alsa")]
+#[cfg(all(feature = "udp", feature = "alsa"))]
 pub mod vban_sender_alsa;
 
-
+#[cfg(all(feature = "tcp", feature = "recipient"))]
+pub mod vban_tcp_recipient;
+#[cfg(all(feature = "tcp", feature = "pipewire"))]
+pub mod vban_tcp_sender_pw;
 
 const VBAN_HEADER_SIZE : usize = 4 + 1 + 1 + 1 + 1 + 16;
 const VBAN_STREAM_NAME_SIZE : usize = 16;

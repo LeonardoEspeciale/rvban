@@ -8,9 +8,11 @@ use simplelog::{Config, TermLogger};
 #[cfg(feature = "alsa")]
 use rvban::vban_sender_alsa::VbanSender ;
 
-#[cfg(feature = "pipewire")]
+#[cfg(all(feature = "pipewire", feature = "udp"))]
 use rvban::vban_sender_pw::VbanSender;
 
+#[cfg(all(feature = "pipewire", feature = "tcp"))]
+use rvban::vban_tcp_sender_pw::VbanSender;
 
 #[derive(Parser)]
 struct Cli {
