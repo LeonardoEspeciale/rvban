@@ -147,7 +147,7 @@ impl VbanRecipient {
             return;
         }
             
-        let head : [u8; 28] = buf[0..28].try_into().unwrap();
+        let head : [u8; VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES] = buf[0..VBAN_PACKET_HEADER_BYTES + VBAN_PACKET_COUNTER_BYTES].try_into().unwrap();
         let head = VBanHeader::from(head);
         
         self.sample_format = Some(head.sample_format.into());

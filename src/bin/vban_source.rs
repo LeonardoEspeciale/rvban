@@ -17,19 +17,19 @@ use rvban::vban_tcp_sender_pw::VbanSender;
 #[derive(Parser)]
 struct Cli {
 
-    /// IP address of the receiver, e.g. 192.168.0.100 (defaults to 127.0.0.1)
+    /// IP address of the receiver, e.g. 192.168.0.100
     #[arg(short='i', long, default_value = "127.0.0.1")]
     peer_address : String,
 
-    /// Port of the receiver (defaults to 6980)
+    /// Port of the receiver
     #[arg(short='p', long, default_value_t = 6980)]
     peer_port : u16,
 
-    /// Specify a stream name (defaults to "Stream1")
+    /// Specify a stream name
     #[arg(short='n', long, value_name = "NAME", default_value = "Stream1")]
     stream_name : String,
 
-    /// Sample rate (defaults to 48000)
+    /// Sample rate
     #[arg(short='r', long, default_value = "48000")]
     sample_rate : u32,
 
@@ -46,10 +46,10 @@ struct Cli {
     config: Option<PathBuf>,
 
     #[arg(short, long, default_value = "spotify")]
-    /// Name of the audio source, i.e. pipewire target application or ALSA (loopback) device (defaults to "spotify")
+    /// Name of the audio source, i.e. pipewire target application or ALSA (loopback) device
     source_name : String,
 
-    /// Encoder [Opus (default), PCM]
+    /// Encoder (Opus, PCM)
     #[arg(short, long, default_value = "opus")]
     encoder : String,
 

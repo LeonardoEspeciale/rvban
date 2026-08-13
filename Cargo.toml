@@ -15,11 +15,12 @@ clap = { version = "4.5.26", features = ["derive"] }
 opus = "0.3.0"
 log = "0.4.27"
 simplelog = "0.12.2"
-pipewire = { version = "0.8.0" , features = [ "v0_3_43", "v0_3_44"], optional = true}
+pipewire = { version = "0.10.0" , features = [ "v0_3_43", "v0_3_44"], optional = true}
 gtk = { version = "0.10.1", package = "gtk4", features = ["v4_14"], optional = true }
+glib-macros = "0.22.6"
 
 [features]
-default = [ "pipewire" , "tcp" ]
+default = [ "pipewire" , "udp" , "gui" ]
 pipewire = [ "dep:pipewire" ]
 alsa = [ "dep:alsa" ]
 gui = [ "dep:gtk" ]

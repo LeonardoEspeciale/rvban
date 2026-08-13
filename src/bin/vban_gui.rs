@@ -1,9 +1,16 @@
+use gtk::glib::MainContext;
 use gtk::{self, Align, Expression, StringList};
 use gtk::prelude::*;
 use gtk::{glib, Application, ApplicationWindow, Orientation};
 use gtk::gdk::Display;
 use glib::clone;
-use pipewire::keys::{APP_NAME, NODE_DESCRIPTION, NODE_NAME, NODE_NICK};
+
+use pipewire as pw;
+use pw::keys::{APP_NAME, NODE_DESCRIPTION, NODE_NAME, NODE_NICK};
+use pw::registry::GlobalObject;
+use pw::spa::utils::dict::DictRef;
+use pw::{main_loop::MainLoopRc, context::ContextRc};
+use pw::keys::{MEDIA_CLASS};
 
 use std::net::IpAddr;
 use std::cell::{Cell, RefCell};
@@ -13,9 +20,17 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, sleep};
 use std::time::Duration;
 
-use pipewire::{context::Context, keys::{MEDIA_CLASS}, main_loop::MainLoop};
-
 use rvban::{VBanCodec, VBanSampleRates};
+
+/* Mein Plan war gerade die App Liste dynamisch anzupassen. AI hat mich auf die Funktion vom GTK Kontext gebracht invoke_local womit man Futures in den MainContext einhängen kann. Durch spawn_local konnte ich außerdem den Pipewire Thread lokal laufen lassen
+Das ist gut, aber ich habe es noch nicht geschafft die Liste korrekt zu verwalten (bekomme noch den Error dass die List gemovet wird und nicht an zwei Stellen parallel verarbeitet werden darf.) */
+
+/* Neuen GObject Type definieren: */
+/* https://docs.gtk.org/gobject/tutorial.html#how-to-define-and-implement-a-new-gobject */
+
+/* 12-08-2026: Habe von Pipewire 0.8.0 auf 0.10.0 aktualisiert. Wahrscheinlich geht Pipeiwre jetzt erstmal gar nicht mehr, aber
+ die neue Version verspricht viel besseren Umgang mit Rc / Smart Pointer: Aktualisieren! */
+
 
 const SAMPLE_RATES : [VBanSampleRates; 7] = 
     [VBanSampleRates::SampleRate6000Hz,
@@ -45,67 +60,110 @@ fn main() -> glib::ExitCode {
         .application_id("com.lennard.vban_gui")
         .build();
 
+    pipewire::init();
+
     app.connect_activate(build_ui);
 
     app.run()
 
 }
 
-fn get_pw_app_names(name_list : &Arc<Mutex<Vec<String>>>){
-    let list = Arc::clone(&name_list);
-    
-    thread::spawn(move ||{
+/// Determine whether the given object should appear in the app list
+fn is_relevant_app(object : &GlobalObject<&DictRef>) -> bool {
+    if object.type_.to_str() != "PipeWire:Interface:Node" {
+        return false;
+    }
 
-        let mainloop = MainLoop::new(None).unwrap();
-        let context = Context::new(&mainloop)
-        .unwrap();
-        let core = context.connect(None).unwrap();
+    let props = match object.props {
+        None => return false,
+        Some(p) => p
+    };
+
+    // println!("{}", object.type_.to_str());
+
+    let class = match props.get(&MEDIA_CLASS){
+        None => return false,
+        Some(class) => class
+    };
+
+    // println!("\t {}", class);
+
+    if ! class.contains("Stream/Output/Audio"){
+        return false;
+    }
+
+    if class.contains("Input") || class.contains("Sink"){
+        return false;
+    }
+
+    true
+}
+
+fn get_pw_app_names(name_list : gtk::gio::ListStore, gtk_context : MainContext){
+
+    let gtkc = gtk_context.clone();
+
+    gtk_context.spawn_local( async move {
+
+        println!("Future is running");
+        let mainloop = MainLoopRc::new(None).unwrap();
+        let pw_context = ContextRc::new(&mainloop, None).unwrap();
+        let core = pw_context.connect_rc(None).unwrap();
         let registry = core.get_registry().unwrap();
 
         let _listener = registry
             .add_listener_local()
-            .global(move |global| {
-                    if global.type_.to_str() == "PipeWire:Interface:Node" {
-                        let props = match global.props {
-                            None => return,
-                            Some(p) => p
-                        };
+            .global(clone!(
+                #[weak] name_list,                
+                move |global| {
+                   if ! is_relevant_app(global){
+                    return;
+                   }
+                   let props = global.props.unwrap();   // safe to unwrap because we checked for None in is_relevant_app
 
-                        // println!("{}", global.type_.to_str());
-
-                        let class = match props.get(&MEDIA_CLASS){
-                            None => return,
-                            Some(class) => class
-                        };
-
-                        // println!("\t {}", class);
-
-                        if ! class.contains("Audio"){
-                            return;
-                        }
-
-                        let mut name = props.get(&APP_NAME);
-                        if name.is_none() {
-                            name = props.get(&NODE_NICK);
-                        }
-                        if name.is_none() {
-                            name = props.get(&NODE_NAME);
-                        }
-                        if name.is_none() {
-                            name = props.get(&NODE_DESCRIPTION);
-                        }
-                        if name.is_none(){
-                            name = Some("Nameless app");
-                        }
-
-                        println!("\t Name: {}", name.unwrap());
-                        // list.push(name.unwrap().clone());
-                        list.lock().unwrap().push(name.unwrap().to_string());
+                    let mut name = props.get(&APP_NAME);
+                    if name.is_none() {
+                        name = props.get(&NODE_NICK);
                     }
+                    if name.is_none() {
+                        name = props.get(&NODE_NAME);
+                    }
+                    if name.is_none() {
+                        name = props.get(&NODE_DESCRIPTION);
+                    }
+                    if name.is_none(){
+                        name = Some("Nameless app");
+                    }
+
+                    println!("\t Name: {}", name.unwrap());
+                    // list.push(name.unwrap().clone());
+
+                    let name = name.unwrap().to_string();
+
+                    gtkc.invoke_local(clone!(
+                        #[weak] name_list,
+                        move || {
+                            let mut properties = [("serial", glib::value::Value::from(0)), ("name", glib::value::Value::from(name.clone()))];
+                            let object = glib::Object::with_mut_values(glib::types::Type::OBJECT, &mut properties);
+                            println!("\t Adding: {} to list", name);
+                            name_list.append(&object);
+                        }
+                    ));
+
+
+                }))
+                .global_remove(move | id | {
+                        // list.lock().unwrap().retain(|n| n != &(name.unwrap().to_string(), id));
+                        println!("\t Removed: {} -- but removing application is not implemented yet", id);
+
                 })
             .register();
 
-        mainloop.run();
+            thread::spawn(move || {
+                mainloop.run();
+            });
+
+    
     });
 
 }
@@ -166,11 +224,14 @@ fn build_ui(app: &Application) {
     let handle = Arc::new(Mutex::new(Option::<std::thread::JoinHandle<()>>::None));
     let vban_state = Arc::new(AtomicBool::new(false));
 
-    let app_names = Arc::new(Mutex::new(Vec::new()));
+    let app_list = gtk::gio::ListStore::with_type(glib::types::Type::OBJECT);
+    
+    let gtk_context = MainContext::default();
     
     load_css();
 
-    get_pw_app_names(&app_names);
+    get_pw_app_names(app_list.clone(), gtk_context);
+
 
     // allow some time to register all applications
     sleep(Duration::from_millis(200));
@@ -333,16 +394,15 @@ fn build_ui(app: &Application) {
 
     // let app_names_dd = gtk::DropDown::from_strings(&app_names.lock().unwrap().iter().map(AsRef::as_ref).collect::<Vec<&str>>());
 
-    let app_names_model = StringList::new(&app_names.lock().unwrap().iter().map(AsRef::as_ref).collect::<Vec<&str>>());
-    let app_names_dd = gtk::DropDown::new(Some(app_names_model), None::<Expression>);
-
+    let app_names_dd = gtk::DropDown::new(Some(app_list.clone()), None::<Expression>);
 
     app_names_dd.connect_selected_item_notify(clone!(
         #[strong] source_name,
+        #[strong] app_list,
         move |dd_menu| {
         let num = dd_menu.selected();
-        *source_name.borrow_mut() = app_names.lock().unwrap()[num as usize].clone();
-        eprintln!("Selected audio source: {}", num);
+        *source_name.borrow_mut() = app_list.item(num).unwrap().property::<String>("name");
+        eprintln!("Selected audio source: {} - {}", num, source_name.borrow());
     }));
 
     app_names_row.append(&app_names_label);
@@ -375,7 +435,7 @@ fn build_ui(app: &Application) {
                     Some(sender) => sender
                 };
 
-                vban_state.compare_exchange(false, true, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+                let _ = vban_state.compare_exchange(false, true, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
                 let vban_state_wk = Arc::<AtomicBool>::downgrade(&vban_state);
                 let new_handle = std::thread::spawn(move || {
                     loop {
@@ -399,7 +459,7 @@ fn build_ui(app: &Application) {
                 toggle.remove_css_class("toggle-inactive");
                 toggle.add_css_class("toggle-active");
             } else {
-                vban_state.compare_exchange(true, false, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+                let _ = vban_state.compare_exchange(true, false, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
 
                 handle.lock().unwrap().take().unwrap().join().unwrap();
 
@@ -430,4 +490,5 @@ fn build_ui(app: &Application) {
     
     // Show the window.
     window.present();
+
 }

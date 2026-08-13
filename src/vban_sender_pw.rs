@@ -217,11 +217,13 @@ impl VbanSender {
         let vban_data = &mut vban_packet[VBAN_PACKET_HEADER_BYTES+VBAN_PACKET_COUNTER_BYTES..];
         vban_data[..encoded.len()].copy_from_slice(&encoded);
 
+        trace!("vban_data is {} bytes long", vban_data.len());
+
         match self.socket.connect(self.peer){
             Ok(()) => (),
             Err(e) => error!("Could not connect to peer: {e}")
         }
-
+     
         match self.socket.send(&vban_packet[..hdr.len()+encoded.len()]){
             Ok(bytes) => trace!("Successfully sent {bytes} bytes via socket"),
             Err(e) => error!("Error while sending data via socket: {e}")

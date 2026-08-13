@@ -12,9 +12,9 @@ use std::{thread::JoinHandle, sync::mpsc::{Sender, Receiver, channel}};
 use alsa::{pcm::*, ValueOr, Direction};
 
 #[cfg(feature = "pipewire")]
-use pipewire::{stream::Stream, main_loop::MainLoop, properties::properties, context::Context, spa::{self, param::audio::AudioFormat}, spa::sys::{spa_format_audio_raw_build}};
+use pipewire::{context::ContextRc, main_loop::MainLoopRc, properties::properties, registry, spa::{self, param::audio::AudioFormat, sys::spa_format_audio_raw_build}, stream::{Stream, StreamBox, StreamFlags}, types};
 
-#[cfg(feature = "udp")]
+#[cfg(all(feature = "udp", feature = "recipient"))]
 pub mod vban_recipient;
 
 #[cfg(all(feature = "udp", feature = "pipewire"))]
@@ -693,7 +693,7 @@ impl PipewireSource {
     fn get_pw_loop_handle(num_channels : u32, sample_rate : u32, target : Option<String>, tx: Sender<Vec<u8>>) -> JoinHandle<Option<()>> {
         std::thread::spawn(move ||{
 
-                let mainloop = match MainLoop::new(None){
+                let mainloop = match MainLoopRc::new(None){
                     Ok(theloop) => theloop,
                     Err(e) => {
                         error!("Error while creating a pipewire main loop ({e}).");
@@ -701,7 +701,7 @@ impl PipewireSource {
                     }
                 };
 
-                let context = match Context::new(&mainloop){
+                let context = match ContextRc::new(&mainloop, None){
                     Ok(ctx) => ctx,
                     Err(e) => {
                         error!("Error while creating pipewire context: {e}.");
@@ -717,6 +717,36 @@ impl PipewireSource {
                     }
                 };
 
+                let registry = match core.get_registry(){
+                    Ok(reg) => reg,
+                    Err(e) => {
+                        error!("Error while getting pipewire registry: {e}.");
+                        return None;
+                    }
+                };
+
+                let _listener = registry.add_listener_local()
+                    .global(|object| {
+                        let id = object.id;
+                        let permissions = object.permissions;
+                        let type_ = &object.type_;
+                        let version = object.version;
+                        let props = object.props;
+
+                        // debug!("Pipewire registry global event: id={id}, permissions={permissions:?}, type={type_}, version={version}");
+
+                        if props.is_some(){
+                            let props = props.unwrap();
+                            if props.get("media.class").is_some(){
+                                let media_class = props.get("media.class").unwrap();
+                                debug!("Properties for id {id}: media.class={media_class}");
+                            }
+                        }
+                    })
+                    .global_remove(|object| {
+                        debug!("Pipewire registry global remove event: id={object}");
+                    })
+                    .register();
                 let tgt = match target {
                     None => "".to_string(),
                     Some(str) => str
@@ -726,32 +756,43 @@ impl PipewireSource {
                     *pipewire::keys::MEDIA_TYPE => "Audio",
                     *pipewire::keys::MEDIA_CATEGORY => "Capture",
                     *pipewire::keys::MEDIA_ROLE => "Music",
-                    *pipewire::keys::MODULE_DESCRIPTION => "Pipewire Rust Test",
+                    *pipewire::keys::MODULE_DESCRIPTION => "VBAN Audio Capture",
                     // *pipewire::keys::AUDIO_FORMAT => "S16LE",
                     // *pipewire::keys::AUDIO_ALLOWED_RATES => "[ 44100 ]",
                     *pipewire::keys::TARGET_OBJECT => tgt.as_str()
                 };
                 
-                let stream = Stream::new(&core, "vban", stream_props).unwrap();
-                let _handle = stream.add_local_listener().process( move |stream, _: &mut Vec<u8>| {
-                    let mut buf = match stream.dequeue_buffer(){
-                        None => return,
-                        Some(buffer) => buffer
-                    };
-                    let size = buf.datas_mut()[0].chunk().size();
-                    let data = Vec::from(buf.datas_mut()[0].data().unwrap());
-                    let data = &data[..size as usize];
-        
-                    // let mut buffer = buffer.write().unwrap();
-                    // buffer.resize(data.len(), 0);
-                    // buffer.copy_from_slice(data);
 
-                    let iter = data.chunks_exact(256);
-                    for chunks in iter{
-                        let _ = tx.send(chunks.to_vec());
-                    }
-        
-                }).register().unwrap();
+                let stream = StreamBox::new(
+                    &core,
+                    "vban",
+                    stream_props
+                ).unwrap();
+
+                let _handle = stream.add_local_listener()
+                    .process( move |stream, _: &mut Vec<u8>| {
+                        let mut buf = match stream.dequeue_buffer(){
+                            None => return,
+                            Some(buffer) => buffer
+                        };
+                        let size = buf.datas_mut()[0].chunk().size();
+                        let data = Vec::from(buf.datas_mut()[0].data().unwrap());
+                        let data = &data[..size as usize];
+            
+                        // let mut buffer = buffer.write().unwrap();
+                        // buffer.resize(data.len(), 0);
+                        // buffer.copy_from_slice(data);
+
+                        let iter = data.chunks_exact(256);
+                        for chunks in iter{
+                            let _ = tx.send(chunks.to_vec());
+                        }
+            
+                    })
+                    .state_changed(|stream, _, old, new| {
+                        trace!("Stream changed: {:?} --> {:?}", old, new);
+                    })
+                    .register().unwrap();
         
                 
                 // set up stream connection
@@ -765,7 +806,7 @@ impl PipewireSource {
                     spa_format_audio_raw_build(builder.as_raw_ptr(), spa::sys::SPA_PARAM_EnumFormat, &mut audio_info.as_raw());
                 }
                 let pod = spa::pod::Pod::from_bytes(&pod_data).unwrap();
-                stream.connect(spa::utils::Direction::Input, Some(pipewire::constants::ID_ANY), pipewire::stream::StreamFlags::AUTOCONNECT, &mut [pod]).expect("Could not connect pipewire stream.");
+                stream.connect(spa::utils::Direction::Input, Some(pipewire::constants::ID_ANY), StreamFlags::AUTOCONNECT | StreamFlags::DONT_RECONNECT, &mut [pod]).expect("Could not connect pipewire stream.");
                 
                 mainloop.run();
 
@@ -782,14 +823,20 @@ impl VbanSource for PipewireSource {
 
         let bytes = buf.len() * 2;
 
+        // if data is in the remainder, use that first, otherwise read from the channel
         let mut data = match self.remainder.len() > 0 {
-            false => self.rx.recv().unwrap(),
+            false => {
+                self.rx.recv().unwrap()
+            },
             true => {
+                trace!("Using {} bytes from remainder", self.remainder.len());
                 let d = Vec::from(self.remainder.clone());
                 self.remainder.clear();
                 d
             }
         };
+
+        trace!("data has a length of {} bytes, buf has a length of {} bytes", data.len(), bytes);
 
         while data.len() < bytes{
             data.append(self.rx.recv().unwrap().as_mut());
